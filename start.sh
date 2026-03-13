@@ -4,8 +4,8 @@
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 LOG_FILE=/var/log/dnscrypt-proxy.log
 PORT=5059
-VERSION="v1.0.0"
-RUN_CONFIG="/tmp/dnscrypt-proxy.run.toml"
+VERSION="v1.1.0"
+RUN_CONFIG="/tmp/dnscrypt-proxy/dnscrypt-proxy.run.toml"
 DNSMASQ_SECTION="dhcp.@dnsmasq[0]"
 DNSMASQ_SERVICE="${DNSMASQ_SERVICE:-/etc/init.d/dnsmasq}"
 HTTPS_DNS_PROXY_SERVICE="${HTTPS_DNS_PROXY_SERVICE:-/etc/init.d/https-dns-proxy}"
@@ -14,13 +14,26 @@ CLOCK_SANE_MIN_EPOCH="${CLOCK_SANE_MIN_EPOCH:-1704067200}"
 CLOCK_WAIT_TIMEOUT_SEC="${CLOCK_WAIT_TIMEOUT_SEC:-300}"
 CLOCK_WAIT_INTERVAL_SEC="${CLOCK_WAIT_INTERVAL_SEC:-5}"
 
+# Load configuration and common utilities
+if [ -f "$SCRIPT_DIR/lib/common.sh" ]; then
+    . "$SCRIPT_DIR/lib/common.sh"
+else
+    echo "Error: common.sh not found!"
+    exit 1
+fi
+
+# Build merged setup config (setup.toml + setup-custom.toml if present)
+build_setup_run_config
+
+# Load configuration from TOML
+FILTER_UPDATE_CRON=$(get_config ".settings.filter_update_cron" "0 4 * * *")
+BLOCKED_NAMES_SOURCES=$(get_config ".sources.blocked_names")
+BLOCK_LOGGING=$(get_config ".settings.block_logging" "0")
+FILTER_DIR=$(get_config ".settings.filter_dir" "/tmp/dnscrypt-proxy")
+
 BACKUP_DNSMASQ_SERVERS=""
 BACKUP_DNSMASQ_NORESOLV=""
 BACKUP_DNSMASQ_ALLSERVERS=""
-
-log() {
-    echo "$@"
-}
 
 set_uci_option_or_delete() {
     local option="$1"
@@ -125,22 +138,110 @@ reconfigure_dnsmasq_safely() {
 }
 
 build_run_config() {
+    mkdir -p "$(dirname "$RUN_CONFIG")"
     rm -f "$RUN_CONFIG"
 
-    if [ -f "$SCRIPT_DIR/custom.toml" ]; then
-        log "Merging custom.toml overrides into temporary run configuration..."
+    local base="$SCRIPT_DIR/dnscrypt-proxy.toml"
+    local custom1="$SCRIPT_DIR/custom.toml"
+    local custom2="$SCRIPT_DIR/dnscrypt-proxy-custom.toml"
 
-        awk '/^\[/ {exit} {print}' "$SCRIPT_DIR/custom.toml" > "$RUN_CONFIG" 2>/dev/null || true
-        awk '/^\[/ {exit} {print}' "$SCRIPT_DIR/dnscrypt-proxy.toml" | \
-            grep -v '^server_names =' >> "$RUN_CONFIG" 2>/dev/null || true
+    log "Building layered run configuration (Base < custom.toml < dnscrypt-key-custom.toml)..."
 
-        echo -e "\n# --- BASE SECTIONS ---" >> "$RUN_CONFIG"
-        sed -n '/^\[/,$p' "$SCRIPT_DIR/dnscrypt-proxy.toml" >> "$RUN_CONFIG" 2>/dev/null || true
+    # --- ROOT KEYS LAYER ---
+    # Start with the highest priority root keys (including comments)
+    if [ -f "$custom2" ]; then
+        awk '/^\[/ {exit} {print}' "$custom2" > "$RUN_CONFIG" 2>/dev/null || true
+    fi
 
-        echo -e "\n# --- CUSTOM SECTIONS ---" >> "$RUN_CONFIG"
-        sed -n '/^\[/,$p' "$SCRIPT_DIR/custom.toml" >> "$RUN_CONFIG" 2>/dev/null || true
+    # Extract keys already defined in the current run config to enable filtering
+    _get_keys() {
+        [ -f "$1" ] || return
+        awk '/^\[/ {exit} /^[a-z_]+[ ]*=/ {split($1, a, "="); print a[1]}' "$1" | tr -d ' '
+    }
+
+    # Layer in custom.toml root keys (filtering out duplicates found in custom2)
+    if [ -f "$custom1" ]; then
+        local existing_keys=$(_get_keys "$RUN_CONFIG")
+        if [ -n "$existing_keys" ]; then
+            local pattern=$(echo "$existing_keys" | sed 's/^/^/; s/$/ =/' | tr '\n' '|')
+            awk '/^\[/ {exit} {print}' "$custom1" | grep -vE "${pattern%|}" >> "$RUN_CONFIG" 2>/dev/null || true
+        else
+            awk '/^\[/ {exit} {print}' "$custom1" >> "$RUN_CONFIG" 2>/dev/null || true
+        fi
+    fi
+
+    # Layer in Base root keys (filtering out duplicates from BOTH custom levels)
+    local existing_keys=$(_get_keys "$RUN_CONFIG")
+    if [ -n "$existing_keys" ]; then
+        local pattern=$(echo "$existing_keys" | sed 's/^/^/; s/$/ =/' | tr '\n' '|')
+        awk '/^\[/ {exit} {print}' "$base" | grep -vE "${pattern%|}" >> "$RUN_CONFIG" 2>/dev/null || true
     else
-        cp "$SCRIPT_DIR/dnscrypt-proxy.toml" "$RUN_CONFIG"
+        awk '/^\[/ {exit} {print}' "$base" >> "$RUN_CONFIG" 2>/dev/null || true
+    fi
+
+    # --- SECTIONS LAYER ---
+    # Concatenate sections in order of increasing priority. last key wins.
+    echo -e "\n# --- BASE SECTIONS ---" >> "$RUN_CONFIG"
+    sed -n '/^\[/,$p' "$base" >> "$RUN_CONFIG" 2>/dev/null || true
+
+    if [ -f "$custom1" ]; then
+        echo -e "\n# --- CUSTOM.TOML SECTIONS ---" >> "$RUN_CONFIG"
+        sed -n '/^\[/,$p' "$custom1" >> "$RUN_CONFIG" 2>/dev/null || true
+    fi
+
+    if [ -f "$custom2" ]; then
+        echo -e "\n# --- DNSCRYPT-PROXY-CUSTOM.TOML SECTIONS ---" >> "$RUN_CONFIG"
+        sed -n '/^\[/,$p' "$custom2" >> "$RUN_CONFIG" 2>/dev/null || true
+    fi
+
+    # Handle DNS Filtering (Blocklist)
+    local tmp_base="$FILTER_DIR"
+    mkdir -p "$tmp_base"
+    local filter_dest="$tmp_base/dnscrypt-blocked-names.txt"
+
+    if [ -n "$BLOCKED_NAMES_SOURCES" ]; then
+        if [ ! -s "$filter_dest" ]; then
+            log "Downloading DNS blocklists to RAM ($filter_dest)..."
+            # Clear or create the destination file
+            > "$filter_dest"
+            
+            # Loop through the multi-line string of URLs
+            for url in $BLOCKED_NAMES_SOURCES; do
+                [ -z "$url" ] && continue
+                log " -> Fetching: $url"
+                curl -sS -L "$url" >> "$filter_dest" || log "Warning: Failed to fetch $url"
+                echo "" >> "$filter_dest" # Ensure newline between lists
+            done
+        fi
+        
+        if [ -s "$filter_dest" ]; then
+            log "Enabling DNS blocklist..."
+            echo -e "\n# --- AUTO-GENERATED BLOCKLIST ---" >> "$RUN_CONFIG"
+            echo "[blocked_names]" >> "$RUN_CONFIG"
+            echo "blocked_names_file = '$filter_dest'" >> "$RUN_CONFIG"
+            
+            if [ "${BLOCK_LOGGING:-0}" != "0" ]; then
+                echo "log_file = '/var/log/dnscrypt-blocked.log'" >> "$RUN_CONFIG"
+                echo "log_format = 'tsv'" >> "$RUN_CONFIG"
+            fi
+        fi
+    fi
+}
+
+setup_cron_job() {
+    local cron_file="/etc/crontabs/root"
+    local job_cmd="$SCRIPT_DIR/update-filters.sh -f >/dev/null 2>&1"
+    
+    local job_schedule="${FILTER_UPDATE_CRON:-0 4 * * *}"
+    if [ -n "$BLOCKED_NAMES_SOURCES" ]; then
+        touch "$cron_file" 2>/dev/null || true
+        if ! grep -Fxq "$job_schedule $job_cmd" "$cron_file"; then
+            # Remove any existing entry for this script and re-add to ensure it matches current schedule/path
+            sed -i "\|$SCRIPT_DIR/update-filters.sh|d" "$cron_file" 2>/dev/null || true
+            log "Configuring cron job for filter updates ($job_schedule)..."
+            echo "$job_schedule $job_cmd" >> "$cron_file"
+            /etc/init.d/cron reload >/dev/null 2>&1 || /etc/init.d/cron restart >/dev/null 2>&1 || true
+        fi
     fi
 }
 
@@ -225,7 +326,7 @@ main() {
     if [ "$force_restart" -eq 0 ] && ps | grep -q "[d]nscrypt-proxy -config"; then
         dnscrypt_already_running=1
         log "dnscrypt-proxy is already running. Validating service and dnsmasq cutover state..."
-        active_config="/tmp/dnscrypt-proxy.run.toml"
+        active_config="/tmp/dnscrypt-proxy/dnscrypt-proxy.run.toml"
     fi
 
     if ! wait_for_sane_clock; then
@@ -238,6 +339,7 @@ main() {
     fi
 
     if [ "$dnscrypt_already_running" -eq 0 ]; then
+        mkdir -p "/tmp/dnscrypt-proxy"
         build_run_config
         log "Starting dnscrypt-proxy..."
         "$SCRIPT_DIR/dnscrypt-proxy" -config "$RUN_CONFIG" > "$LOG_FILE" 2>&1 &
@@ -264,6 +366,14 @@ main() {
 
     log "Success: DNSCrypt is actively resolving queries independently."
 
+    setup_system_integration
+    setup_cron_job
+
+    # Robustly stop https-dns-proxy without redundant logs
+    if [ -x "$HTTPS_DNS_PROXY_SERVICE" ]; then
+        "$HTTPS_DNS_PROXY_SERVICE" stop >/dev/null 2>&1 || true
+    fi
+
     if dnsmasq_uses_dnscrypt_only && validate_dnsmasq_runtime; then
         log "dnsmasq is already using DNSCrypt cleanly. No cutover needed."
         return 0
@@ -276,8 +386,6 @@ main() {
     fi
 
     log "Dnsmasq successfully reconfigured to use DNSCrypt."
-    log "Stopping https-dns-proxy..."
-    "$HTTPS_DNS_PROXY_SERVICE" stop 2>/dev/null || true
     log "DNS cutover complete."
     return 0
 }

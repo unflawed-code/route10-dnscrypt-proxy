@@ -1,0 +1,5 @@
+[sources]
+blocked_names = [
+  "url1", # comment
+  "url2"
+]

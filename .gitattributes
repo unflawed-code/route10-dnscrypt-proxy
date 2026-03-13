@@ -1,20 +1,11 @@
-# Force Unix line endings for all text files
-* text=auto eol=lf
+# Handle line endings automatically for files detected as text 
+# and perform LF normalization.
+* text=auto
 
-# Explicitly mark shell scripts
-*.sh text eol=lf
-
-# Keep markdown and text files with LF
-*.md text eol=lf
-*.txt text eol=lf
-*.conf text eol=lf
-
-# Binary files (no line ending conversion)
-*.png binary
-*.jpg binary
-*.gif binary
-
-# Exclude from release archives (git archive / GitHub releases)
-/tests export-ignore
-/.gitignore export-ignore
-/.gitattributes export-ignore
+# Explicitly declare settings for executable files to ensure they
+# always use LF line endings, regardless of the operating system.
+# This is critical for scripts running on OpenWrt / Linux.
+**/*.sh text eol=lf
+**/*.lua text eol=lf
+**/*.toml text eol=lf
+dnscrypt-proxy.logrotate text eol=lf

@@ -1,0 +1,29 @@
+# Route10 DNSCrypt-Proxy Setup Configuration
+# This file handles the versioning and source settings for the DNSCrypt-Proxy service.
+
+[dnscrypt]
+# The version of DNSCrypt-Proxy to install.
+version = "2.1.15"
+# The official download URL for the ARM64 Linux binary.
+download_url = "https://github.com/DNSCrypt/dnscrypt-proxy/releases/download/2.1.15/dnscrypt-proxy-linux_arm64-2.1.15.tar.gz"
+
+[upx]
+# UPX is used to compress the DNSCrypt binary to save space on the router.
+version = "5.1.1"
+download_url = "https://github.com/upx/upx/releases/download/v5.1.1/upx-5.1.1-arm64_linux.tar.xz"
+
+[settings]
+# 1 = Enable binary compression via UPX, 0 = Disable.
+compress_binary = "1"
+# Temporary directory used during the setup process.
+tmp_dir = "/tmp/dnscrypt-setup"
+# Path to the router's post-configuration startup script.
+post_cfg = "/cfg/post-cfg.sh"
+# Schedule for the filter update cron job.
+filter_update_cron = "0 4 * * *"
+# Directory for the concatenated blocklist file (e.g. dnscrypt-blocked-names.txt).
+filter_dir = "/a/dnscrypt-proxy"
+# Threshold for considering the blocklist stale (in hours).
+filter_staleness_hours = "12"
+# 1 = Enable logging of blocked queries, 0 = Disable.
+block_logging = "0"
