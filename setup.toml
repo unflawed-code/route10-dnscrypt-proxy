@@ -27,3 +27,9 @@ filter_dir = "/a/dnscrypt-proxy"
 filter_staleness_hours = "12"
 # 1 = Enable logging of blocked queries, 0 = Disable.
 block_logging = "0"
+
+# [sources]
+# # URLs for the DNS blocklists. These will be merged and updated by update-filters.sh.
+# blocked_names = [
+#     "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/wildcard/multi-onlydomains.txt", # Hagezi Multi Normal
+# ]
