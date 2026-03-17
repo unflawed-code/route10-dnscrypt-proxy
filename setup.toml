@@ -29,7 +29,8 @@ filter_staleness_hours = "12"
 block_logging = "0"
 
 # [sources]
-# # URLs for the DNS blocklists. These will be merged and updated by update-filters.sh.
+# CAUTION: Route10 only has 1GB of memory. Do not use multiple or heavy lists unless you know what you are doing.
+# URLs for the DNS blocklists. These will be merged and updated by update-filters.sh.
 # blocked_names = [
-#     "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/wildcard/multi-onlydomains.txt", # Hagezi Multi Normal
+#     "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/wildcard/light-onlydomains.txt",
 # ]

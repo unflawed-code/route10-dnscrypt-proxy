@@ -199,31 +199,15 @@ build_run_config() {
     mkdir -p "$tmp_base"
     local filter_dest="$tmp_base/dnscrypt-blocked-names.txt"
 
-    if [ -n "$BLOCKED_NAMES_SOURCES" ]; then
-        if [ ! -s "$filter_dest" ]; then
-            log "Downloading DNS blocklists to RAM ($filter_dest)..."
-            # Clear or create the destination file
-            > "$filter_dest"
-            
-            # Loop through the multi-line string of URLs
-            for url in $BLOCKED_NAMES_SOURCES; do
-                [ -z "$url" ] && continue
-                log " -> Fetching: $url"
-                curl -sS -L "$url" >> "$filter_dest" || log "Warning: Failed to fetch $url"
-                echo "" >> "$filter_dest" # Ensure newline between lists
-            done
-        fi
-        
-        if [ -s "$filter_dest" ]; then
-            log "Enabling DNS blocklist..."
-            echo -e "\n# --- AUTO-GENERATED BLOCKLIST ---" >> "$RUN_CONFIG"
-            echo "[blocked_names]" >> "$RUN_CONFIG"
-            echo "blocked_names_file = '$filter_dest'" >> "$RUN_CONFIG"
-            
-            if [ "${BLOCK_LOGGING:-0}" != "0" ]; then
-                echo "log_file = '/var/log/dnscrypt-blocked.log'" >> "$RUN_CONFIG"
-                echo "log_format = 'tsv'" >> "$RUN_CONFIG"
-            fi
+    if [ -n "$BLOCKED_NAMES_SOURCES" ] && [ -s "$filter_dest" ]; then
+        log "Enabling DNS blocklist..."
+        echo -e "\n# --- AUTO-GENERATED BLOCKLIST ---" >> "$RUN_CONFIG"
+        echo "[blocked_names]" >> "$RUN_CONFIG"
+        echo "blocked_names_file = '$filter_dest'" >> "$RUN_CONFIG"
+
+        if [ "${BLOCK_LOGGING:-0}" != "0" ]; then
+            echo "log_file = '/var/log/dnscrypt-blocked.log'" >> "$RUN_CONFIG"
+            echo "log_format = 'tsv'" >> "$RUN_CONFIG"
         fi
     fi
 }
@@ -365,6 +349,12 @@ main() {
     fi
 
     log "Success: DNSCrypt is actively resolving queries independently."
+
+    if [ -n "$BLOCKED_NAMES_SOURCES" ] && [ "${DNSCRYPT_SKIP_FILTER_BOOT_UPDATE:-0}" != "1" ]; then
+        log "Blocklist sources detected: $(printf '%s\n' "$BLOCKED_NAMES_SOURCES" | sed '/^$/d' | wc -l | tr -d ' ')"
+        log "Refreshing DNS blocklists after DNSCrypt is live..."
+        "$SCRIPT_DIR/update-filters.sh" >/dev/null 2>&1 || log "Warning: blocklist refresh failed; will retry via cron."
+    fi
 
     setup_system_integration
     setup_cron_job

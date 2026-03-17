@@ -49,7 +49,7 @@ fi
 # run start.sh to restore DNS and then continue with the update.
 if ! nslookup cdn.jsdelivr.net 127.0.0.1 >/dev/null 2>&1; then
     echo "DNS resolution failed. Running start.sh to restore DNS..."
-    "$SCRIPT_DIR/start.sh"
+    DNSCRYPT_SKIP_FILTER_BOOT_UPDATE=1 "$SCRIPT_DIR/start.sh"
     sleep 5
     if ! nslookup cdn.jsdelivr.net 127.0.0.1 >/dev/null 2>&1; then
         echo "Error: DNS still broken after running start.sh. Aborting filter update."
