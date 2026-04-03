@@ -167,9 +167,10 @@ export DNSCRYPT_START_LIB_ONLY=1
 export DNSMASQ_SERVICE=dnsmasq_service
 export HTTPS_DNS_PROXY_SERVICE=https_dns_proxy_service
 export NSLOOKUP_CMD=nslookup_stub
+export SCRIPT_DIR="$PROJECT_ROOT"
 
 # shellcheck source=/dev/null
-. "$PROJECT_ROOT/start.sh"
+. "$PROJECT_ROOT/scripts/start.sh"
 
 build_run_config() {
     BUILD_RUN_CONFIG_CALLS=$((BUILD_RUN_CONFIG_CALLS + 1))
@@ -225,7 +226,7 @@ UCI_NORESOLV="1"
 UCI_ALLSERVERS="0"
 if main; then
     assert_eq "0" "$BUILD_RUN_CONFIG_CALLS" "main skips run-config rebuild when dnscrypt is already running"
-    assert_eq "/tmp/dnscrypt-proxy.run.toml" "$WAIT_FOR_DNSCRYPT_RESOLUTION_CONFIG" "main validates the active run config for already-running dnscrypt"
+    assert_eq "/tmp/dnscrypt-proxy/dnscrypt-proxy.run.toml" "$WAIT_FOR_DNSCRYPT_RESOLUTION_CONFIG" "main validates the active run config for already-running dnscrypt"
 else
     say_fail "already-running validation path returned failure"
 fi

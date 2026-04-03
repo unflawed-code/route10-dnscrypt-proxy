@@ -32,7 +32,7 @@ fi
 echo "--- Test 5: raw Lua parse ---"
 LUA_PATH="$SCRIPT_DIR/lib/?.lua;;" lua -e "
     local toml = require('toml')
-    local status, data = pcall(toml.parse, '$SCRIPT_DIR/setup.toml')
+    local status, data = pcall(toml.parse, '$SCRIPT_DIR/conf/setup.toml')
     if not status then print('PARSE ERROR: ' .. tostring(data)); os.exit(1) end
     print('version: ' .. tostring(data.dnscrypt.version))
     if data.sources and data.sources.blocked_names then

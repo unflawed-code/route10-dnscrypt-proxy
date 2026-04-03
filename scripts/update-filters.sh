@@ -2,7 +2,13 @@
 # update-filters.sh
 # Downloads the latest DNS blocklists and restarts dnscrypt-proxy
 
-SCRIPT_DIR=$(dirname "$(readlink -f "$0")")
+SELF_DIR=$(dirname "$(readlink -f "$0")")
+if [ "$(basename "$SELF_DIR")" = "scripts" ]; then
+    PROJECT_DIR=$(dirname "$SELF_DIR")
+else
+    PROJECT_DIR="$SELF_DIR"
+fi
+SCRIPT_DIR="$PROJECT_DIR"
 
 if [ -f "$SCRIPT_DIR/lib/common.sh" ]; then
     . "$SCRIPT_DIR/lib/common.sh"
@@ -16,10 +22,22 @@ build_setup_run_config
 
 # Load configuration from TOML
 BLOCKED_NAMES_SOURCES=$(get_config ".sources.blocked_names")
+FILTER_DIR=$(get_config ".settings.filter_dir" "/tmp/dnscrypt-proxy")
+mkdir -p "$FILTER_DIR"
+FILTER_DEST="$FILTER_DIR/dnscrypt-blocked-names.txt"
 
 if [ -z "$BLOCKED_NAMES_SOURCES" ]; then
-    echo "Error: BLOCKED_NAMES_SOURCES is not defined in setup.toml"
-    exit 1
+    echo "No blocked_names sources configured. DNS blocklist updates are disabled."
+    if [ -f "$FILTER_DEST" ]; then
+        rm -f "$FILTER_DEST"
+        echo "Removed stale blocklist file: $FILTER_DEST"
+    fi
+    echo "Reloading DNSCrypt configuration to fully disable blocklist section..."
+    DNSCRYPT_SKIP_FILTER_BOOT_UPDATE=1 /bin/ash "$PROJECT_DIR/proxy.sh" start -f >/dev/null 2>&1 || {
+        echo "Warning: Could not reload DNSCrypt via start.sh -f; sending SIGHUP fallback."
+        kill -HUP "$(pgrep dnscrypt-proxy)" 2>/dev/null || true
+    }
+    exit 0
 fi
 
 FORCE=0
@@ -27,9 +45,6 @@ if [ "${1:-}" = "-f" ]; then
     FORCE=1
 fi
 
-FILTER_DIR=$(get_config ".settings.filter_dir" "/tmp/dnscrypt-proxy")
-mkdir -p "$FILTER_DIR"
-FILTER_DEST="$FILTER_DIR/dnscrypt-blocked-names.txt"
 TMP_DEST="${FILTER_DEST}.tmp"
 STALENESS_HOURS=$(get_config ".settings.filter_staleness_hours" "12")
 STALENESS_SEC=$(( STALENESS_HOURS * 3600 ))
@@ -49,7 +64,7 @@ fi
 # run start.sh to restore DNS and then continue with the update.
 if ! nslookup cdn.jsdelivr.net 127.0.0.1 >/dev/null 2>&1; then
     echo "DNS resolution failed. Running start.sh to restore DNS..."
-    DNSCRYPT_SKIP_FILTER_BOOT_UPDATE=1 "$SCRIPT_DIR/start.sh"
+    DNSCRYPT_SKIP_FILTER_BOOT_UPDATE=1 /bin/ash "$PROJECT_DIR/proxy.sh" start
     sleep 5
     if ! nslookup cdn.jsdelivr.net 127.0.0.1 >/dev/null 2>&1; then
         echo "Error: DNS still broken after running start.sh. Aborting filter update."

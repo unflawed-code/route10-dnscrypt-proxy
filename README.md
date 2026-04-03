@@ -14,11 +14,13 @@ A specialized deployment of DNSCrypt-proxy optimized for the Alta Labs Route10 r
 
 ## Installation & Usage
 
+Configuration files now live under `conf/`.
+
 1. **Deploy**: Copy all files to `/cfg/dnscrypt-proxy/`.
-2. **Permissions**: `chmod 700 /cfg/dnscrypt-proxy/*.sh`
+2. **Permissions**: `chmod 700 /cfg/dnscrypt-proxy/*.sh /cfg/dnscrypt-proxy/scripts/*.sh`
 3. **Install**: Run `/cfg/dnscrypt-proxy/setup.sh`.
    - This installs the binary and adds a commented boot hook to `/cfg/post-cfg.sh`.
-4. **Start**: Run `/cfg/dnscrypt-proxy/start.sh`.
+4. **Start**: Run `/cfg/dnscrypt-proxy/proxy.sh start`.
 
 ## Router Integration Notes
 
@@ -31,20 +33,20 @@ A specialized deployment of DNSCrypt-proxy optimized for the Alta Labs Route10 r
 
 | Base File | Override File | Purpose |
 | :--- | :--- | :--- |
-| `setup.toml` | `setup-custom.toml` | Versions, update schedule, blocklist sources, and storage paths. |
-| `dnscrypt-proxy.toml` | `dnscrypt-proxy-custom.toml` | Standard dnscrypt-proxy settings. |
+| `conf/setup.toml` | `conf/setup-custom.toml` | Versions, update schedule, blocklist sources, and storage paths. |
+| `conf/dnscrypt-proxy.toml` | `conf/dnscrypt-proxy-custom.toml` | Standard dnscrypt-proxy settings. |
 
 ## CLI Reference
 
 Both main scripts support a `-f` (force) flag for specific maintenance tasks:
 
-### `start.sh -f`
+### `proxy.sh start -f`
 
 - **Action**: Force Restart.
 - **Behavior**: Kills any existing `dnscrypt-proxy` processes, rebuilds the temporary runtime configuration from scratch (merging all active overrides), and performs a full service validation and `dnsmasq` cutover check.
 - **Use Case**: Use this after making changes to any `.toml` file to ensure they are applied immediately.
 
-### `update-filters.sh -f`
+### `proxy.sh update-filters -f`
 
 - **Action**: Force Filter Refresh.
 - **Behavior**: Bypasses the default 12-hour staleness check and immediately downloads fresh blocklists from the configured sources. It then signals `dnscrypt-proxy` (via `SIGHUP`) to reload the new filters.

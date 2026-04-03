@@ -1,7 +1,18 @@
 #!/bin/ash
 # Wrapper to start dnscrypt-proxy and configure dnsmasq robustly
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+if [ -n "${SCRIPT_DIR:-}" ] && [ -f "${SCRIPT_DIR}/lib/common.sh" ]; then
+    PROJECT_DIR="$SCRIPT_DIR"
+else
+    SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
+    if [ "$(basename "$SELF_DIR")" = "scripts" ]; then
+        PROJECT_DIR="$(dirname "$SELF_DIR")"
+    else
+        PROJECT_DIR="$SELF_DIR"
+    fi
+fi
+SCRIPT_DIR="$PROJECT_DIR"
+SCRIPTS_DIR="$PROJECT_DIR/scripts"
 LOG_FILE=/var/log/dnscrypt-proxy.log
 PORT=5059
 VERSION="v1.1.0"
@@ -141,9 +152,9 @@ build_run_config() {
     mkdir -p "$(dirname "$RUN_CONFIG")"
     rm -f "$RUN_CONFIG"
 
-    local base="$SCRIPT_DIR/dnscrypt-proxy.toml"
-    local custom1="$SCRIPT_DIR/custom.toml"
-    local custom2="$SCRIPT_DIR/dnscrypt-proxy-custom.toml"
+    local base="$PROJECT_DIR/conf/dnscrypt-proxy.toml"
+    local custom1="$PROJECT_DIR/conf/custom.toml"
+    local custom2="$PROJECT_DIR/conf/dnscrypt-proxy-custom.toml"
 
     log "Building layered run configuration (Base < custom.toml < dnscrypt-key-custom.toml)..."
 
@@ -214,18 +225,32 @@ build_run_config() {
 
 setup_cron_job() {
     local cron_file="/etc/crontabs/root"
-    local job_cmd="$SCRIPT_DIR/update-filters.sh -f >/dev/null 2>&1"
-    
-    local job_schedule="${FILTER_UPDATE_CRON:-0 4 * * *}"
-    if [ -n "$BLOCKED_NAMES_SOURCES" ]; then
-        touch "$cron_file" 2>/dev/null || true
-        if ! grep -Fxq "$job_schedule $job_cmd" "$cron_file"; then
-            # Remove any existing entry for this script and re-add to ensure it matches current schedule/path
-            sed -i "\|$SCRIPT_DIR/update-filters.sh|d" "$cron_file" 2>/dev/null || true
-            log "Configuring cron job for filter updates ($job_schedule)..."
-            echo "$job_schedule $job_cmd" >> "$cron_file"
-            /etc/init.d/cron reload >/dev/null 2>&1 || /etc/init.d/cron restart >/dev/null 2>&1 || true
-        fi
+    local filter_job_cmd="/bin/ash $PROJECT_DIR/proxy.sh update-filters -f >/dev/null 2>&1"
+    local updater_job_cmd="/bin/ash $PROJECT_DIR/proxy.sh updater check >/dev/null 2>&1"
+    local filter_job_schedule="${FILTER_UPDATE_CRON:-0 4 * * *}"
+    local updater_job_schedule="35 4 * * *"
+    local changed=0
+
+    touch "$cron_file" 2>/dev/null || return 0
+
+    if [ -n "$BLOCKED_NAMES_SOURCES" ] && ! grep -Fxq "$filter_job_schedule $filter_job_cmd" "$cron_file"; then
+        sed -i "\|proxy.sh update-filters|d" "$cron_file" 2>/dev/null || true
+        sed -i "\|update-filters.sh -f|d" "$cron_file" 2>/dev/null || true
+        log "Configuring cron job for filter updates ($filter_job_schedule)..."
+        echo "$filter_job_schedule $filter_job_cmd" >> "$cron_file"
+        changed=1
+    fi
+
+    if [ -f "$SCRIPTS_DIR/updater.sh" ] && ! grep -Fxq "$updater_job_schedule $updater_job_cmd" "$cron_file"; then
+        sed -i "\|proxy.sh updater check|d" "$cron_file" 2>/dev/null || true
+        sed -i "\|updater.sh check|d" "$cron_file" 2>/dev/null || true
+        log "Configuring cron job for updater checks ($updater_job_schedule)..."
+        echo "$updater_job_schedule $updater_job_cmd" >> "$cron_file"
+        changed=1
+    fi
+
+    if [ "$changed" -eq 1 ]; then
+        /etc/init.d/cron reload >/dev/null 2>&1 || /etc/init.d/cron restart >/dev/null 2>&1 || true
     fi
 }
 
@@ -282,7 +307,7 @@ wait_for_dnscrypt_resolution() {
     local config_path="${1:-$RUN_CONFIG}"
 
     while [ "$retry" -lt "$max_retries" ]; do
-        if "$SCRIPT_DIR/dnscrypt-proxy" -resolve google.com -config "$config_path" >/dev/null 2>&1; then
+        if "$PROJECT_DIR/dnscrypt-proxy" -resolve google.com -config "$config_path" >/dev/null 2>&1; then
             return 0
         fi
         log "Waiting for DNSCrypt to establish upstream connection (Attempt $((retry + 1))/$max_retries)..."
@@ -307,6 +332,11 @@ main() {
 
     log "--- DNSCrypt Startup Sequence Initiated ($VERSION) ---"
 
+    # Re-create volatile integrations early so they persist across reboot even
+    # if DNS startup later aborts due clock/network readiness.
+    setup_system_integration "$SCRIPT_DIR"
+    setup_cron_job
+
     if [ "$force_restart" -eq 0 ] && ps | grep -q "[d]nscrypt-proxy -config"; then
         dnscrypt_already_running=1
         log "dnscrypt-proxy is already running. Validating service and dnsmasq cutover state..."
@@ -326,7 +356,7 @@ main() {
         mkdir -p "/tmp/dnscrypt-proxy"
         build_run_config
         log "Starting dnscrypt-proxy..."
-        "$SCRIPT_DIR/dnscrypt-proxy" -config "$RUN_CONFIG" > "$LOG_FILE" 2>&1 &
+        "$PROJECT_DIR/dnscrypt-proxy" -config "$RUN_CONFIG" > "$LOG_FILE" 2>&1 &
 
         if ! wait_for_dnscrypt_bind; then
             log "ERROR: dnscrypt-proxy failed to start or bind to port $PORT after retries."
@@ -353,11 +383,8 @@ main() {
     if [ -n "$BLOCKED_NAMES_SOURCES" ] && [ "${DNSCRYPT_SKIP_FILTER_BOOT_UPDATE:-0}" != "1" ]; then
         log "Blocklist sources detected: $(printf '%s\n' "$BLOCKED_NAMES_SOURCES" | sed '/^$/d' | wc -l | tr -d ' ')"
         log "Refreshing DNS blocklists after DNSCrypt is live..."
-        "$SCRIPT_DIR/update-filters.sh" >/dev/null 2>&1 || log "Warning: blocklist refresh failed; will retry via cron."
+        /bin/ash "$PROJECT_DIR/proxy.sh" update-filters >/dev/null 2>&1 || log "Warning: blocklist refresh failed; will retry via cron."
     fi
-
-    setup_system_integration
-    setup_cron_job
 
     # Robustly stop https-dns-proxy without redundant logs
     if [ -x "$HTTPS_DNS_PROXY_SERVICE" ]; then

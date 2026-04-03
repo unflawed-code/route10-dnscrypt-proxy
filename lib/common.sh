@@ -8,12 +8,12 @@ log() {
     echo "$@"
 }
 
-# Build a merged setup config from setup.toml + setup-custom.toml (if present).
+# Build a merged setup config from conf/setup.toml + conf/setup-custom.toml (if present).
 # Output: /tmp/dnscrypt-proxy/setup.run.toml
 # If setup-custom.toml is absent, no merged file is written (setup.toml is used directly).
 build_setup_run_config() {
-    local base="$SCRIPT_DIR/setup.toml"
-    local custom="$SCRIPT_DIR/setup-custom.toml"
+    local base="$SCRIPT_DIR/conf/setup.toml"
+    local custom="$SCRIPT_DIR/conf/setup-custom.toml"
     local run_config="/tmp/dnscrypt-proxy/setup.run.toml"
 
     [ -f "$base" ] || return 0
@@ -56,7 +56,7 @@ build_setup_run_config() {
     fi
 }
 
-# Helper to read configuration from setup.toml (or setup.run.toml if present)
+# Helper to read configuration from conf/setup.toml (or setup.run.toml if present)
 # Usage: get_config ".key.path" [default_value]
 get_config() {
     local key="$1"
@@ -67,8 +67,8 @@ get_config() {
     # Prefer the merged run config when it exists (built by build_setup_run_config)
     if [ -f "/tmp/dnscrypt-proxy/setup.run.toml" ]; then
         toml_file="/tmp/dnscrypt-proxy/setup.run.toml"
-    elif [ -f "$SCRIPT_DIR/setup.toml" ]; then
-        toml_file="$SCRIPT_DIR/setup.toml"
+    elif [ -f "$SCRIPT_DIR/conf/setup.toml" ]; then
+        toml_file="$SCRIPT_DIR/conf/setup.toml"
     else
         echo "$default"
         return
@@ -104,7 +104,7 @@ setup_system_integration() {
     fi
 
     # Ensure logrotate config is installed (survives reboot if /etc is volatile)
-    local logrotate_src="$script_dir/dnscrypt-proxy.logrotate"
+    local logrotate_src="$script_dir/conf/dnscrypt-proxy.logrotate"
     local logrotate_dest="/etc/logrotate.d/dnscrypt-proxy"
 
     if [ -f "$logrotate_src" ]; then
