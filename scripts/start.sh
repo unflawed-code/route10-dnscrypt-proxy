@@ -318,6 +318,32 @@ wait_for_dnscrypt_resolution() {
     return 1
 }
 
+ensure_allowed_names_file() {
+    [ -f "$RUN_CONFIG" ] || return 0
+    local allowed_file
+    local fallback_file
+    allowed_file="$(sed -n "s/^[[:space:]]*allowed_names_file[[:space:]]*=[[:space:]]*['\"]\\([^'\"]*\\)['\"].*/\\1/p" "$RUN_CONFIG" | head -n 1)"
+    [ -n "$allowed_file" ] || return 0
+    [ -f "$allowed_file" ] && return 0
+
+    mkdir -p "$(dirname "$allowed_file")" 2>/dev/null || true
+    if : > "$allowed_file" 2>/dev/null; then
+        log "Created missing allowed_names file: $allowed_file"
+        return 0
+    fi
+
+    # Optional whitelist should never block startup. Use a safe writable fallback.
+    fallback_file="/tmp/dnscrypt-proxy/allowed-names.fallback.txt"
+    mkdir -p "/tmp/dnscrypt-proxy" 2>/dev/null || true
+    : > "$fallback_file" 2>/dev/null || true
+    if [ -f "$fallback_file" ]; then
+        sed -i "s#^[[:space:]]*allowed_names_file[[:space:]]*=.*#allowed_names_file = '$fallback_file'#" "$RUN_CONFIG" 2>/dev/null || true
+        log "Whitelist path '$allowed_file' is unavailable; using fallback '$fallback_file'."
+    else
+        log "Warning: whitelist path '$allowed_file' is unavailable and fallback creation failed; continuing without guaranteed allowlist file."
+    fi
+}
+
 main() {
     local force_restart=0
     local dnscrypt_already_running=0
@@ -355,6 +381,7 @@ main() {
     if [ "$dnscrypt_already_running" -eq 0 ]; then
         mkdir -p "/tmp/dnscrypt-proxy"
         build_run_config
+        ensure_allowed_names_file
         log "Starting dnscrypt-proxy..."
         "$PROJECT_DIR/dnscrypt-proxy" -config "$RUN_CONFIG" > "$LOG_FILE" 2>&1 &
 
