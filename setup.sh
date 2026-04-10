@@ -64,6 +64,15 @@ cron_or_default() {
     fi
 }
 
+ensure_project_script_permissions() {
+    local script_path
+
+    find "$SCRIPT_DIR" -type f -name '*.sh' | while IFS= read -r script_path; do
+        [ -f "$script_path" ] || continue
+        chmod 700 "$script_path" 2>/dev/null || chmod +x "$script_path" 2>/dev/null || true
+    done
+}
+
 while [ $# -gt 0 ]; do
     case "$1" in
         --non-interactive|-n)
@@ -196,13 +205,9 @@ if [ "$SKIP_DOWNLOAD" -eq 0 ]; then
     rm -rf "$TMP_DIR"
 fi
 
-# Ensure start script and binary are executable
-chmod +x "$SCRIPT_DIR/proxy.sh" 2>/dev/null || true
-chmod +x "$SCRIPT_DIR/scripts/start.sh"
+# Ensure shell entrypoints remain executable
+ensure_project_script_permissions
 chmod +x "$SCRIPT_DIR/dnscrypt-proxy" 2>/dev/null || true
-chmod +x "$SCRIPT_DIR/scripts/update-filters.sh" 2>/dev/null || true
-chmod +x "$SCRIPT_DIR/scripts/updater.sh" 2>/dev/null || true
-chmod +x "$SCRIPT_DIR/scripts/uninstall.sh" 2>/dev/null || true
 
 # Configure post-cfg.sh integration
 echo "Configuring boot integration in $POST_CFG..."

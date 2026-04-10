@@ -170,7 +170,7 @@ rollback_update() {
 
     rm -rf "${REMOTE_DIR:?}/"*
     cp -rf "${backup_dir}/"* "$REMOTE_DIR/"
-    chmod +x "${REMOTE_DIR}/"*.sh "${REMOTE_DIR}/scripts/"*.sh 2>/dev/null || true
+    ensure_script_permissions "$REMOTE_DIR"
     log "Rollback complete."
 }
 
@@ -181,6 +181,19 @@ cleanup_trap() {
     if [ -n "$UPDATE_TMP_DIR" ]; then
         rm -rf "$UPDATE_TMP_DIR" "$UPDATE_BACKUP_DIR" 2>/dev/null || true
     fi
+}
+
+ensure_script_permissions() {
+    local target_dir="$1"
+    [ -d "$target_dir" ] || return 0
+
+    find "$target_dir" -type f -name '*.sh' | while IFS= read -r script; do
+        [ -f "$script" ] || continue
+        if [ ! -x "$script" ]; then
+            chmod 700 "$script"
+            log "Repaired execute permission on $script"
+        fi
+    done
 }
 
 perform_update() {
@@ -238,7 +251,7 @@ perform_update() {
         fi
     done
 
-    chmod +x "${REMOTE_DIR}/"*.sh "${REMOTE_DIR}/scripts/"*.sh 2>/dev/null || true
+    ensure_script_permissions "$REMOTE_DIR"
 
     log "Running setup.sh in non-interactive mode"
     # Pipe an explicit "no" in case the fetched release contains an older interactive setup.sh.
