@@ -11,6 +11,7 @@ A specialized deployment of DNSCrypt-proxy optimized for the Alta Labs Route10 r
 - **Robust DNS Cutover**: `start.sh` handles the complex handoff between `dnsmasq` and DNSCrypt, ensuring a switch only after an upstream connection is verified.
 - **Flexible DNS Filtering**: Supports dynamic DNS filtering. Multiple URL sources (Hagezi, etc.) can be configured. These are merged into a single blocklist file.
 - **Automated Filter Updates**: A dedicated `update-filters.sh` script installs a `crontab` entry to refresh and reload filters daily (defaults to 4:00 AM).
+- **Configurable Auto-Updater**: Updater cron checks are controlled by `settings.enable_auto_update` (`0` by default) and `settings.updater_check_cron` in `conf/setup.toml`.
 
 ## Installation & Usage
 

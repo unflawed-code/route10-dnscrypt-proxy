@@ -8,6 +8,61 @@ log() {
     echo "$@"
 }
 
+is_valid_cron_schedule() {
+    [ -n "${1:-}" ] || return 1
+    printf '%s\n' "$1" | awk '
+        function isnum(v) { return v ~ /^[0-9]+$/ }
+        function check_token(tok, min, max,    base, step, pair) {
+            base = tok
+            step = ""
+            if (index(tok, "/")) {
+                split(tok, pair, "/")
+                if (length(pair[1]) == 0 || length(pair[2]) == 0) return 0
+                base = pair[1]
+                step = pair[2]
+                if (!isnum(step) || step < 1) return 0
+            }
+            if (base == "*") return 1
+            if (index(base, "-")) {
+                split(base, pair, "-")
+                if (length(pair[1]) == 0 || length(pair[2]) == 0) return 0
+                if (!isnum(pair[1]) || !isnum(pair[2])) return 0
+                if (pair[1] < min || pair[1] > max || pair[2] < min || pair[2] > max) return 0
+                return (pair[1] <= pair[2])
+            }
+            if (isnum(base)) return (base >= min && base <= max)
+            return 0
+        }
+        function check_field(field, min, max,    i, n, parts) {
+            n = split(field, parts, ",")
+            if (n < 1) return 0
+            for (i = 1; i <= n; i++) {
+                if (!check_token(parts[i], min, max)) return 0
+            }
+            return 1
+        }
+        NF != 5 { exit 1 }
+        !check_field($1, 0, 59) { exit 1 }
+        !check_field($2, 0, 23) { exit 1 }
+        !check_field($3, 1, 31) { exit 1 }
+        !check_field($4, 1, 12) { exit 1 }
+        !check_field($5, 0, 7)  { exit 1 }
+        { exit 0 }
+    ' >/dev/null 2>&1
+}
+
+cron_or_default() {
+    local candidate="${1:-}"
+    local fallback="${2:-}"
+    local label="${3:-cron}"
+    if is_valid_cron_schedule "$candidate"; then
+        printf '%s' "$candidate"
+    else
+        [ -n "$candidate" ] && log "Invalid ${label} schedule '$candidate'; using fallback '$fallback'."
+        printf '%s' "$fallback"
+    fi
+}
+
 # Build a merged setup config from conf/setup.toml + conf/setup-custom.toml (if present).
 # Output: /tmp/dnscrypt-proxy/setup.run.toml
 # If setup-custom.toml is absent, no merged file is written (setup.toml is used directly).

@@ -24,6 +24,8 @@ NSLOOKUP_CMD="${NSLOOKUP_CMD:-nslookup}"
 CLOCK_SANE_MIN_EPOCH="${CLOCK_SANE_MIN_EPOCH:-1704067200}"
 CLOCK_WAIT_TIMEOUT_SEC="${CLOCK_WAIT_TIMEOUT_SEC:-300}"
 CLOCK_WAIT_INTERVAL_SEC="${CLOCK_WAIT_INTERVAL_SEC:-5}"
+START_LOCK_DIR="/tmp/dnscrypt-proxy/start.lock"
+START_LOCK_PID_FILE="${START_LOCK_DIR}/pid"
 
 # Load configuration and common utilities
 if [ -f "$SCRIPT_DIR/lib/common.sh" ]; then
@@ -33,11 +35,33 @@ else
     exit 1
 fi
 
+cron_or_default() {
+    local value="$1"
+    local fallback="$2"
+    local key_name="${3:-cron}"
+
+    if [ -z "$value" ]; then
+        echo "$fallback"
+        return 0
+    fi
+
+    if [ "$(printf '%s\n' "$value" | awk '{ print NF }')" = "5" ]; then
+        echo "$value"
+    else
+        log "Warning: Invalid cron expression for $key_name ('$value'). Falling back to '$fallback'."
+        echo "$fallback"
+    fi
+}
+
 # Build merged setup config (setup.toml + setup-custom.toml if present)
 build_setup_run_config
 
 # Load configuration from TOML
 FILTER_UPDATE_CRON=$(get_config ".settings.filter_update_cron" "0 4 * * *")
+ENABLE_AUTO_UPDATE=$(get_config ".settings.enable_auto_update" "0")
+UPDATER_CHECK_CRON=$(get_config ".settings.updater_check_cron" "35 4 * * *")
+FILTER_UPDATE_CRON="$(cron_or_default "$FILTER_UPDATE_CRON" "0 4 * * *" "settings.filter_update_cron")"
+UPDATER_CHECK_CRON="$(cron_or_default "$UPDATER_CHECK_CRON" "35 4 * * *" "settings.updater_check_cron")"
 BLOCKED_NAMES_SOURCES=$(get_config ".sources.blocked_names")
 BLOCK_LOGGING=$(get_config ".settings.block_logging" "0")
 FILTER_DIR=$(get_config ".settings.filter_dir" "/tmp/dnscrypt-proxy")
@@ -54,6 +78,13 @@ set_uci_option_or_delete() {
     else
         uci -q delete "$option" 2>/dev/null || true
     fi
+}
+
+is_enabled() {
+    case "${1:-0}" in
+        1|true|TRUE|yes|YES|on|ON) return 0 ;;
+        *) return 1 ;;
+    esac
 }
 
 backup_dnsmasq_state() {
@@ -228,7 +259,7 @@ setup_cron_job() {
     local filter_job_cmd="/bin/ash $PROJECT_DIR/proxy.sh update-filters -f >/dev/null 2>&1"
     local updater_job_cmd="/bin/ash $PROJECT_DIR/proxy.sh updater check >/dev/null 2>&1"
     local filter_job_schedule="${FILTER_UPDATE_CRON:-0 4 * * *}"
-    local updater_job_schedule="35 4 * * *"
+    local updater_job_schedule="${UPDATER_CHECK_CRON:-35 4 * * *}"
     local changed=0
 
     touch "$cron_file" 2>/dev/null || return 0
@@ -241,9 +272,13 @@ setup_cron_job() {
         changed=1
     fi
 
-    if [ -f "$SCRIPTS_DIR/updater.sh" ] && ! grep -Fxq "$updater_job_schedule $updater_job_cmd" "$cron_file"; then
+    if grep -q "proxy.sh updater check\|updater.sh check" "$cron_file" 2>/dev/null; then
         sed -i "\|proxy.sh updater check|d" "$cron_file" 2>/dev/null || true
         sed -i "\|updater.sh check|d" "$cron_file" 2>/dev/null || true
+        changed=1
+    fi
+
+    if is_enabled "$ENABLE_AUTO_UPDATE" && [ -f "$SCRIPTS_DIR/updater.sh" ] && ! grep -Fxq "$updater_job_schedule $updater_job_cmd" "$cron_file"; then
         log "Configuring cron job for updater checks ($updater_job_schedule)..."
         echo "$updater_job_schedule $updater_job_cmd" >> "$cron_file"
         changed=1
@@ -344,6 +379,38 @@ ensure_allowed_names_file() {
     fi
 }
 
+release_start_lock() {
+    if [ -d "$START_LOCK_DIR" ] && [ "$(cat "$START_LOCK_PID_FILE" 2>/dev/null || true)" = "$$" ]; then
+        rm -rf "$START_LOCK_DIR" 2>/dev/null || true
+    fi
+}
+
+acquire_start_lock() {
+    local lock_pid
+
+    mkdir -p "/tmp/dnscrypt-proxy" 2>/dev/null || true
+
+    if mkdir "$START_LOCK_DIR" 2>/dev/null; then
+        printf '%s\n' "$$" > "$START_LOCK_PID_FILE" 2>/dev/null || true
+        trap release_start_lock EXIT INT TERM
+        return 0
+    fi
+
+    lock_pid="$(cat "$START_LOCK_PID_FILE" 2>/dev/null || true)"
+    if [ -n "$lock_pid" ] && ! kill -0 "$lock_pid" 2>/dev/null; then
+        rm -rf "$START_LOCK_DIR" 2>/dev/null || true
+        if mkdir "$START_LOCK_DIR" 2>/dev/null; then
+            printf '%s\n' "$$" > "$START_LOCK_PID_FILE" 2>/dev/null || true
+            trap release_start_lock EXIT INT TERM
+            log "Recovered stale DNSCrypt startup lock."
+            return 0
+        fi
+    fi
+
+    log "Another DNSCrypt start instance is already running. Exiting."
+    return 1
+}
+
 main() {
     local force_restart=0
     local dnscrypt_already_running=0
@@ -354,6 +421,10 @@ main() {
         killall dnscrypt-proxy 2>/dev/null || true
         sleep 2
         force_restart=1
+    fi
+
+    if ! acquire_start_lock; then
+        return 0
     fi
 
     log "--- DNSCrypt Startup Sequence Initiated ($VERSION) ---"

@@ -7,7 +7,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 VERSION="v1.1.0"
 CRON_FILE="/etc/crontabs/root"
-UPDATER_CRON="35 4 * * * /bin/ash $SCRIPT_DIR/proxy.sh updater check >/dev/null 2>&1"
+UPDATER_CRON=""
 FILTER_CRON=""
 BOOT_HOOK_CMD="$SCRIPT_DIR/proxy.sh start >/var/log/dnscrypt-proxy-boot.log 2>&1 &"
 BOOT_HOOK_PREFIX="# "
@@ -45,6 +45,25 @@ normalize_project_line_endings() {
 
 normalize_project_line_endings
 
+cron_or_default() {
+    local value="$1"
+    local fallback="$2"
+    local key_name="${3:-cron}"
+
+    # BusyBox cron expects exactly 5 schedule fields.
+    if [ -z "$value" ]; then
+        echo "$fallback"
+        return 0
+    fi
+
+    if [ "$(printf '%s\n' "$value" | awk '{ print NF }')" = "5" ]; then
+        echo "$value"
+    else
+        echo "Warning: Invalid cron expression for $key_name ('$value'). Falling back to '$fallback'." >&2
+        echo "$fallback"
+    fi
+}
+
 while [ $# -gt 0 ]; do
     case "$1" in
         --non-interactive|-n)
@@ -81,7 +100,19 @@ COMPRESS_BINARY=$(get_config ".settings.compress_binary" "1")
 TMP_DIR=$(get_config ".settings.tmp_dir" "/tmp/dnscrypt-setup")
 POST_CFG=$(get_config ".settings.post_cfg" "/cfg/post-cfg.sh")
 FILTER_UPDATE_CRON=$(get_config ".settings.filter_update_cron" "0 4 * * *")
+ENABLE_AUTO_UPDATE=$(get_config ".settings.enable_auto_update" "0")
+UPDATER_CHECK_CRON=$(get_config ".settings.updater_check_cron" "35 4 * * *")
+FILTER_UPDATE_CRON="$(cron_or_default "$FILTER_UPDATE_CRON" "0 4 * * *" "settings.filter_update_cron")"
+UPDATER_CHECK_CRON="$(cron_or_default "$UPDATER_CHECK_CRON" "35 4 * * *" "settings.updater_check_cron")"
+UPDATER_CRON="$UPDATER_CHECK_CRON /bin/ash $SCRIPT_DIR/proxy.sh updater check >/dev/null 2>&1"
 FILTER_CRON="$FILTER_UPDATE_CRON /bin/ash $SCRIPT_DIR/proxy.sh update-filters -f >/dev/null 2>&1"
+
+is_enabled() {
+    case "${1:-0}" in
+        1|true|TRUE|yes|YES|on|ON) return 0 ;;
+        *) return 1 ;;
+    esac
+}
 
 update_uci_version() {
     command -v uci >/dev/null 2>&1 || return 0
@@ -198,44 +229,47 @@ elif grep -Eq "^[[:space:]]*#[[:space:]]*${SCRIPT_DIR}/start\\.sh >/var/log/dnsc
     BOOT_HOOK_PREFIX="# "
 fi
 
-sed -i "\|$SCRIPT_DIR/start.sh >/var/log/dnscrypt-proxy-boot.log 2>&1 &|d" "$POST_CFG" 2>/dev/null || true
-sed -i "\|# $SCRIPT_DIR/start.sh >/var/log/dnscrypt-proxy-boot.log 2>&1 &|d" "$POST_CFG" 2>/dev/null || true
-sed -i "\|$SCRIPT_DIR/scripts/start.sh >/var/log/dnscrypt-proxy-boot.log 2>&1 &|d" "$POST_CFG" 2>/dev/null || true
-sed -i "\|# $SCRIPT_DIR/scripts/start.sh >/var/log/dnscrypt-proxy-boot.log 2>&1 &|d" "$POST_CFG" 2>/dev/null || true
-sed -i "\|$SCRIPT_DIR/proxy.sh start[[:space:]]*&|d" "$POST_CFG" 2>/dev/null || true
-sed -i "\|# $SCRIPT_DIR/proxy.sh start[[:space:]]*&|d" "$POST_CFG" 2>/dev/null || true
-sed -i "\|^[[:space:]]*# Start DNSCrypt-Proxy in background after boot[[:space:]]*$|d" "$POST_CFG" 2>/dev/null || true
-sed -i "\|^[[:space:]]*Start DNSCrypt-Proxy in background after boot[[:space:]]*$|d" "$POST_CFG" 2>/dev/null || true
-if ! grep -Fq "# $BOOT_HOOK_CMD" "$POST_CFG"; then
-    echo "Adding DNSCrypt startup hook to $POST_CFG..."
-    cp "$POST_CFG" "${POST_CFG}.bak"
-    
-    tmp_post=$(mktemp)
-    
-    # Start with the shebang from the original file
-    head -n 1 "$POST_CFG" > "$tmp_post"
-    
-    # Insert the new block
+echo "Canonicalizing DNSCrypt boot hook in $POST_CFG..."
+cp "$POST_CFG" "${POST_CFG}.bak"
+tmp_clean=$(mktemp)
+tmp_post=$(mktemp)
+
+awk \
+    -v root_entry="$SCRIPT_DIR/start.sh >/var/log/dnscrypt-proxy-boot.log 2>&1 &" \
+    -v scripts_entry="$SCRIPT_DIR/scripts/start.sh >/var/log/dnscrypt-proxy-boot.log 2>&1 &" \
+    -v proxy_entry="$BOOT_HOOK_CMD" '
+    function trim(s) {
+        sub(/^[[:space:]]+/, "", s)
+        sub(/[[:space:]]+$/, "", s)
+        return s
+    }
     {
-        echo ""
-        echo "# Start DNSCrypt-Proxy in background after boot"
-        echo "${BOOT_HOOK_PREFIX}${BOOT_HOOK_CMD}"
-    } >> "$tmp_post"
-    
-    # Append the rest of the original file
-    tail -n +2 "$POST_CFG" >> "$tmp_post"
-    
-    if [ -s "$tmp_post" ] && [ "$(wc -l < "$tmp_post")" -gt "$(wc -l < "$POST_CFG")" ]; then
-        cat "$tmp_post" > "$POST_CFG"
-        echo "Successfully updated $POST_CFG."
-    else
-        echo "Error: Failed to safely update $POST_CFG. Restoring backup."
-        mv "${POST_CFG}.bak" "$POST_CFG"
-    fi
-    rm -f "$tmp_post"
+        line = trim($0)
+        if (line == "# Start DNSCrypt-Proxy in background after boot" || line == "Start DNSCrypt-Proxy in background after boot") next
+        if (line == root_entry || line == "# " root_entry) next
+        if (line == scripts_entry || line == "# " scripts_entry) next
+        if (line == proxy_entry || line == "# " proxy_entry) next
+        print
+    }
+' "$POST_CFG" > "$tmp_clean"
+
+{
+    head -n 1 "$tmp_clean"
+    printf '\n%s\n%s%s\n\n' \
+        "# Start DNSCrypt-Proxy in background after boot" \
+        "$BOOT_HOOK_PREFIX" \
+        "$BOOT_HOOK_CMD"
+    tail -n +2 "$tmp_clean" | awk 'BEGIN { started = 0 } /[^[:space:]]/ { started = 1 } started { print }'
+} | awk '{ lines[NR] = $0 } END { while (NR > 0 && lines[NR] ~ /^[[:space:]]*$/) NR--; for (i = 1; i <= NR; i++) print lines[i]; print "" }' > "$tmp_post"
+
+if ! cmp -s "$POST_CFG" "$tmp_post" 2>/dev/null; then
+    cat "$tmp_post" > "$POST_CFG"
+    echo "Successfully updated $POST_CFG."
 else
-    echo "DNSCrypt startup hook already exists in $POST_CFG."
+    echo "DNSCrypt startup hook already canonical."
 fi
+
+rm -f "$tmp_clean" "$tmp_post" "${POST_CFG}.bak"
 
 # System integration (volatile files/dirs) is handled by common.sh
 if command -v setup_system_integration >/dev/null 2>&1; then
@@ -248,12 +282,18 @@ if [ -f "$CRON_FILE" ]; then
         grep -Fv "updater.sh check" | \
         grep -Fv "proxy.sh update-filters" | \
         grep -Fv "update-filters.sh -f" > "${CRON_FILE}.tmp" || true
-    echo "$UPDATER_CRON" >> "${CRON_FILE}.tmp"
+    if is_enabled "$ENABLE_AUTO_UPDATE" && [ -f "$SCRIPT_DIR/scripts/updater.sh" ]; then
+        echo "$UPDATER_CRON" >> "${CRON_FILE}.tmp"
+    fi
     echo "$FILTER_CRON" >> "${CRON_FILE}.tmp"
     if ! cmp -s "$CRON_FILE" "${CRON_FILE}.tmp" 2>/dev/null; then
         mv "${CRON_FILE}.tmp" "$CRON_FILE"
         /etc/init.d/cron restart >/dev/null 2>&1 || true
-        echo "Configured updater cron: $UPDATER_CRON"
+        if is_enabled "$ENABLE_AUTO_UPDATE" && [ -f "$SCRIPT_DIR/scripts/updater.sh" ]; then
+            echo "Configured updater cron: $UPDATER_CRON"
+        else
+            echo "Updater cron disabled (settings.enable_auto_update=$ENABLE_AUTO_UPDATE)"
+        fi
         echo "Configured filter cron: $FILTER_CRON"
     else
         rm -f "${CRON_FILE}.tmp"
