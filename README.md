@@ -11,7 +11,7 @@ A specialized deployment of DNSCrypt-proxy optimized for the Alta Labs Route10 r
 - **Robust DNS Cutover**: `start.sh` handles the complex handoff between `dnsmasq` and DNSCrypt, ensuring a switch only after an upstream connection is verified.
 - **Flexible DNS Filtering**: Supports dynamic DNS filtering. Multiple URL sources (Hagezi, etc.) can be configured. These are merged into a single blocklist file.
 - **Automated Filter Updates**: A dedicated `update-filters.sh` script installs a `crontab` entry to refresh and reload filters daily (defaults to 4:00 AM).
-- **Configurable Auto-Updater**: Updater cron checks are controlled by `settings.enable_auto_update` (`0` by default) and `settings.updater_check_cron` in `conf/setup.toml`.
+- **Configurable Auto-Updater**: Supports manual update checks and optional cron-driven release checks via `proxy.sh updater`. Auto-update scheduling is controlled by `settings.enable_auto_update` (`0` by default) and `settings.updater_check_cron` in `conf/setup.toml`.
 
 ## Installation & Usage
 
@@ -53,7 +53,31 @@ Both main scripts support a `-f` (force) flag for specific maintenance tasks:
 - **Behavior**: Bypasses the default 12-hour staleness check and immediately downloads fresh blocklists from the configured sources. It then signals `dnscrypt-proxy` (via `SIGHUP`) to reload the new filters.
 - **Use Case**: Use this if you want to update your blocklists immediately without waiting for the next scheduled cron job.
 
+### `proxy.sh updater check`
+
+- **Action**: Check for a newer GitHub release.
+- **Behavior**: Compares the installed version with the latest published release tag. If a newer version exists, the updater downloads the release archive, preserves local custom configuration files, reruns `setup.sh --non-interactive --keep-binary`, and restarts the service.
+- **Use Case**: Use this for a normal manual update check or to verify that auto-update would succeed.
+
+### `proxy.sh updater force`
+
+- **Action**: Force an update cycle.
+- **Behavior**: Runs the same archive download and install path even if the current version already matches the latest release.
+- **Use Case**: Use this to repair an install, reapply the latest packaged scripts, or validate the updater path.
+
+### Updater Notes
+
+- Manual update command:
+  - `/cfg/dnscrypt-proxy/proxy.sh updater check`
+- Auto-update cron command:
+  - `/bin/ash /cfg/dnscrypt-proxy/proxy.sh updater check >/dev/null 2>&1`
+- Auto-update only runs when `settings.enable_auto_update=1` in `conf/setup.toml` or `conf/setup-custom.toml`.
+- Updater logs are written to:
+  - `/var/log/dnscrypt-proxy-updater.log`
+- After updates, shell entrypoints are rechecked and execute permissions are repaired automatically if needed.
+
 ## Maintenance
 
 - **Service Status**: `ps w | grep [d]nscrypt-proxy`
 - **Logs**: `/var/log/dnscrypt-proxy.log`
+- **Updater Logs**: `/var/log/dnscrypt-proxy-updater.log`
