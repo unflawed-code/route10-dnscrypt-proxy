@@ -228,12 +228,12 @@ build_run_config() {
 
     if [ -f "$custom1" ]; then
         echo -e "\n# --- CUSTOM.TOML SECTIONS ---" >> "$RUN_CONFIG"
-        sed -n '/^\[/,$p' "$custom1" >> "$RUN_CONFIG" 2>/dev/null || true
+        awk '/^\[/ { in_section=1; skip = ($0 ~ /^\[route10\]/) } in_section && !skip { print }' "$custom1" >> "$RUN_CONFIG" 2>/dev/null || true
     fi
 
     if [ -f "$custom2" ]; then
         echo -e "\n# --- DNSCRYPT-PROXY-CUSTOM.TOML SECTIONS ---" >> "$RUN_CONFIG"
-        sed -n '/^\[/,$p' "$custom2" >> "$RUN_CONFIG" 2>/dev/null || true
+        awk '/^\[/ { in_section=1; skip = ($0 ~ /^\[route10\]/) } in_section && !skip { print }' "$custom2" >> "$RUN_CONFIG" 2>/dev/null || true
     fi
 
     # Handle DNS Filtering (Blocklist)
@@ -251,6 +251,18 @@ build_run_config() {
             echo "log_file = '/var/log/dnscrypt-blocked.log'" >> "$RUN_CONFIG"
             echo "log_format = 'tsv'" >> "$RUN_CONFIG"
         fi
+    fi
+
+    # Handle DNS Filtering (Allowlist from custom.toml)
+    local whitelist_dest="$FILTER_DIR/dnscrypt-allowed-names.txt"
+    local inline_names
+    inline_names=$(LUA_PATH="$PROJECT_DIR/lib/?.lua;;" lua "$PROJECT_DIR/lib/get_config.lua" "$PROJECT_DIR/conf/custom.toml" ".route10.allowed_names" 2>/dev/null)
+    
+    if [ -n "$inline_names" ]; then
+        log "Enabling DNS allowlist (inline)..."
+        echo -e "\n# --- AUTO-GENERATED ALLOWLIST ---" >> "$RUN_CONFIG"
+        echo "[allowed_names]" >> "$RUN_CONFIG"
+        echo "allowed_names_file = '$whitelist_dest'" >> "$RUN_CONFIG"
     fi
 }
 
@@ -357,25 +369,48 @@ ensure_allowed_names_file() {
     [ -f "$RUN_CONFIG" ] || return 0
     local allowed_file
     local fallback_file
+    local src_file="$PROJECT_DIR/conf/allowed-names.txt"
     allowed_file="$(sed -n "s/^[[:space:]]*allowed_names_file[[:space:]]*=[[:space:]]*['\"]\\([^'\"]*\\)['\"].*/\\1/p" "$RUN_CONFIG" | head -n 1)"
     [ -n "$allowed_file" ] || return 0
-    [ -f "$allowed_file" ] && return 0
 
     mkdir -p "$(dirname "$allowed_file")" 2>/dev/null || true
-    if : > "$allowed_file" 2>/dev/null; then
-        log "Created missing allowed_names file: $allowed_file"
+
+    # Populate from custom.toml [route10.allowed_names] inline array if present
+    local inline_names
+    inline_names=$(LUA_PATH="$SCRIPT_DIR/lib/?.lua;;" lua "$SCRIPT_DIR/lib/get_config.lua" "$PROJECT_DIR/conf/custom.toml" ".route10.allowed_names" 2>/dev/null)
+    
+    if [ -n "$inline_names" ]; then
+        echo "$inline_names" > "$allowed_file"
+        log "Populated allowed_names file from inline custom.toml array."
         return 0
     fi
 
-    # Optional whitelist should never block startup. Use a safe writable fallback.
+    # Fallback: Populate from project source (conf/allowed-names.txt) if present
+    if [ -f "$src_file" ]; then
+        if cp "$src_file" "$allowed_file" 2>/dev/null; then
+            log "Populated allowed_names file from conf/allowed-names.txt."
+            return 0
+        fi
+    fi
+
+    # File may already exist from a previous run — keep it
+    [ -s "$allowed_file" ] && return 0
+
+    # Last resort: create an empty file so dnscrypt-proxy doesn't refuse to start
+    if : > "$allowed_file" 2>/dev/null; then
+        log "Created empty allowed_names file: $allowed_file"
+        return 0
+    fi
+
+    # The target path is unwritable — patch the run config to a writable fallback
     fallback_file="/tmp/dnscrypt-proxy/allowed-names.fallback.txt"
     mkdir -p "/tmp/dnscrypt-proxy" 2>/dev/null || true
     : > "$fallback_file" 2>/dev/null || true
     if [ -f "$fallback_file" ]; then
         sed -i "s#^[[:space:]]*allowed_names_file[[:space:]]*=.*#allowed_names_file = '$fallback_file'#" "$RUN_CONFIG" 2>/dev/null || true
-        log "Whitelist path '$allowed_file' is unavailable; using fallback '$fallback_file'."
+        log "Allowed-names path '$allowed_file' is unavailable; using fallback '$fallback_file'."
     else
-        log "Warning: whitelist path '$allowed_file' is unavailable and fallback creation failed; continuing without guaranteed allowlist file."
+        log "Warning: allowed_names path '$allowed_file' is unavailable and fallback creation failed; continuing without allowlist."
     fi
 }
 
