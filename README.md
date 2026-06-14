@@ -1,4 +1,4 @@
-# Route10 DNSCrypt-Proxy (v2.1.16)
+# Route10 DNSCrypt-Proxy
 
 A specialized deployment of DNSCrypt-proxy (v2.1.16) optimized for the Alta Labs Route10 router environment.
 
