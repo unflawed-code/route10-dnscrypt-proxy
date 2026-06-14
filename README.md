@@ -1,6 +1,6 @@
-# Route10 DNSCrypt-Proxy
+# Route10 DNSCrypt-Proxy (v2.1.16)
 
-A specialized deployment of DNSCrypt-proxy optimized for the Alta Labs Route10 router environment.
+A specialized deployment of DNSCrypt-proxy (v2.1.16) optimized for the Alta Labs Route10 router environment.
 
 ## Custom Features
 
@@ -56,7 +56,7 @@ Both main scripts support a `-f` (force) flag for specific maintenance tasks:
 ### `proxy.sh updater check`
 
 - **Action**: Check for a newer GitHub release.
-- **Behavior**: Compares the installed version with the latest published release tag. If a newer version exists, the updater downloads the release archive, preserves local custom configuration files, reruns `setup.sh --non-interactive --keep-binary`, and restarts the service.
+- **Behavior**: Compares the installed version with the latest published release tag. If a newer version exists, the updater downloads the release archive, preserves local custom configuration files, reruns `setup.sh` (omitting binary download if the version has not changed), and restarts the service.
 - **Use Case**: Use this for a normal manual update check or to verify that auto-update would succeed.
 
 ### `proxy.sh updater force`

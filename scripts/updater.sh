@@ -16,6 +16,9 @@ GITHUB_REPO="unflawed-code/route10-dnscrypt-proxy"
 LATEST_RELEASE_URL="https://api.github.com/repos/${GITHUB_REPO}/releases/latest"
 WEB_LATEST_URL="https://github.com/${GITHUB_REPO}/releases/latest"
 INSTALL_VERSION_FILE="${REMOTE_DIR}/.installed-version"
+SELF_SHELL="/bin/ash"
+[ -x "$SELF_SHELL" ] || SELF_SHELL="/bin/sh"
+ORIGINAL_ARGS="$*"
 
 UPDATE_SUCCESS=0
 UPDATE_TMP_DIR=""
@@ -32,11 +35,10 @@ get_dnscrypt_core_version() {
         /^\[dnscrypt\]/ { in_dnscrypt = 1; next }
         /^\[/ { in_dnscrypt = 0 }
         in_dnscrypt && /^version[[:space:]]*=/ {
-            gsub(/"/, "", $3)
             print $3
             exit
         }
-    ' "${REMOTE_DIR}/conf/setup.toml" 2>/dev/null | tr -d '\r'
+    ' "${REMOTE_DIR}/conf/setup.toml" 2>/dev/null | tr -d '\r" '
 }
 
 get_uci_installed_version() {
@@ -102,15 +104,28 @@ reconcile_version_parity() {
     set_uci_installed_version "$PARITY_VERSION"
 }
 
+fetch_url() {
+    local url="$1"
+    if command -v wget >/dev/null 2>&1; then
+        wget --no-check-certificate -qO- "$url"
+    elif command -v curl >/dev/null 2>&1; then
+        curl -fsSL "$url"
+    else
+        return 1
+    fi
+}
+
+extract_first_tag() {
+    tr '{' '\n' | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1
+}
+
 get_latest_version_tag() {
     local tag=""
 
-    if command -v wget >/dev/null 2>&1; then
-        tag=$(wget --no-check-certificate -qO- "$LATEST_RELEASE_URL" | sed -n 's/.*"tag_name": "\(.*\)".*/\1/p' | head -n 1)
-    elif command -v curl >/dev/null 2>&1; then
-        tag=$(curl -s "$LATEST_RELEASE_URL" | sed -n 's/.*"tag_name": "\(.*\)".*/\1/p' | head -n 1)
-    fi
+    # Method 1: GitHub API (Primary)
+    tag=$(fetch_url "$LATEST_RELEASE_URL" | extract_first_tag || true)
 
+    # Method 2: Fallback to Redirect (No API rate limits)
     if [ -z "$tag" ]; then
         if command -v curl >/dev/null 2>&1; then
             tag=$(curl -sIL "$WEB_LATEST_URL" | grep -i "^location:" | sed -n 's/.*\/tag\(s\)\?\/\([^[:space:]\r]*\).*/\2/p' | tail -n 1)
@@ -123,43 +138,53 @@ get_latest_version_tag() {
     echo "$tag" | tr -d '\r'
 }
 
-version_gt() {
-    # Strip everything after '-' to handle rc versions correctly in integer comparisons
-    local v1
-    local v2
-    local i
-    local p1
-    local p2
-    v1=$(echo "$1" | sed 's/^v//' | cut -d- -f1 | tr -d '\r')
-    v2=$(echo "$2" | sed 's/^v//' | cut -d- -f1 | tr -d '\r')
+get_prerelease_info() {
+    local ver="$1"
+    local pri=3
+    local val=0
 
-    # If numeric parts match exactly, check if one is an RC and the other is stable
-    if [ "$v1" = "$v2" ]; then
-        # If GitHub ($1) is stable and local ($2) is rc, GitHub is greater
-        if echo "$1" | grep -qv "-" && echo "$2" | grep -q "-"; then
-            return 0
+    if echo "$ver" | grep -q "-"; then
+        if echo "$ver" | grep -iq "rc"; then
+            pri=2
+            val=$(echo "$ver" | sed -n 's/.*[Rr][Cc]//p' | tr -dc '0-9')
+        elif echo "$ver" | grep -iq "beta"; then
+            pri=1
+            val=$(echo "$ver" | sed -n 's/.*[Bb][Ee][Tt][Aa]//p' | tr -dc '0-9')
+        else
+            pri=0
+            val=$(echo "$ver" | sed 's/.*-//' | tr -dc '0-9')
         fi
-        # If both are rc tags, compare rc numbers
-        if echo "$1" | grep -q "-" && echo "$2" | grep -q "-"; then
-            local rc1
-            local rc2
-            rc1=$(echo "$1" | sed 's/.*-rc//' | tr -dc '0-9')
-            rc2=$(echo "$2" | sed 's/.*-rc//' | tr -dc '0-9')
-            if [ "${rc1:-0}" -gt "${rc2:-0}" ]; then return 0; fi
-        fi
-        return 1
     fi
+    echo "${pri} ${val:-0}"
+}
 
-    i=1
+version_gt() {
+    # Strip everything after '-' to handle rc/beta versions correctly in integer comparisons
+    local v1=$(echo "$1" | sed 's/^v//' | cut -d- -f1 | tr -d '\r')
+    local v2=$(echo "$2" | sed 's/^v//' | cut -d- -f1 | tr -d '\r')
+    
+    local i=1
     while [ $i -le 3 ]; do
-        p1=$(echo "$v1" | cut -d. -f$i)
-        p2=$(echo "$v2" | cut -d. -f$i)
-        [ -n "$p1" ] || p1=0
-        [ -n "$p2" ] || p2=0
+        local p1=$(echo "$v1" | cut -d. -f$i); [ -z "$p1" ] && p1=0
+        local p2=$(echo "$v2" | cut -d. -f$i); [ -z "$p2" ] && p2=0
         if [ "$p1" -gt "$p2" ]; then return 0; fi
         if [ "$p1" -lt "$p2" ]; then return 1; fi
-        i=$((i + 1))
+        i=$((i+1))
     done
+
+    # Compare pre-release priority and value
+    local info1=$(get_prerelease_info "$1")
+    local info2=$(get_prerelease_info "$2")
+    
+    local pri1=$(echo "$info1" | cut -d' ' -f1)
+    local val1=$(echo "$info1" | cut -d' ' -f2)
+    local pri2=$(echo "$info2" | cut -d' ' -f1)
+    local val2=$(echo "$info2" | cut -d' ' -f2)
+
+    if [ "$pri1" -gt "$pri2" ]; then return 0; fi
+    if [ "$pri1" -lt "$pri2" ]; then return 1; fi
+    if [ "$val1" -gt "$val2" ]; then return 0; fi
+
     return 1
 }
 
@@ -171,6 +196,7 @@ rollback_update() {
     rm -rf "${REMOTE_DIR:?}/"*
     cp -rf "${backup_dir}/"* "$REMOTE_DIR/"
     ensure_script_permissions "$REMOTE_DIR"
+    /bin/ash "${REMOTE_DIR}/setup.sh" --non-interactive --keep-binary || log "WARNING: Rollback setup also failed."
     log "Rollback complete."
 }
 
@@ -231,8 +257,54 @@ perform_update() {
     extracted_root="$(ls -d "${UPDATE_TMP_DIR}/${GITHUB_REPO##*/}"* 2>/dev/null | head -n 1)"
     [ -d "$extracted_root" ] || return 1
 
-    # Preserve local custom overrides and local binary from the current install.
-    for keep_file in conf/setup-custom.toml conf/dnscrypt-proxy-custom.toml conf/custom.toml dnscrypt-proxy; do
+    # --- Self-Update Check ---
+    # Detect if the updater itself has changed in the downloaded version.
+    # If so, replace the current script and restart using 'exec' so 
+    # the new logic is used for the application phase.
+    local new_updater="${extracted_root}/scripts/updater.sh"
+    [ ! -f "$new_updater" ] && new_updater="${extracted_root}/updater.sh"
+    
+    if [ -f "$new_updater" ] && ! cmp -s "$0" "$new_updater" 2>/dev/null; then
+        log "New updater logic detected. Self-updating before proceeding..."
+        cp -f "$new_updater" "$0"
+        chmod 700 "$0"
+        log "Restarting updater to use the latest application logic..."
+        if [ -n "$ORIGINAL_ARGS" ]; then
+            exec "$SELF_SHELL" "$0" $ORIGINAL_ARGS
+        else
+            exec "$SELF_SHELL" "$0"
+        fi
+    fi
+
+    # Determine if the dnscrypt core version has changed
+    local old_core_ver
+    local new_core_ver
+    old_core_ver=$(get_dnscrypt_core_version)
+    new_core_ver=""
+    if [ -f "${extracted_root}/conf/setup.toml" ]; then
+        new_core_ver=$(awk '
+            /^\[dnscrypt\]/ { in_dnscrypt = 1; next }
+            /^\[/ { in_dnscrypt = 0 }
+            in_dnscrypt && /^version[[:space:]]*=/ {
+                print $3
+                exit
+            }
+        ' "${extracted_root}/conf/setup.toml" 2>/dev/null | tr -d '\r" ')
+    fi
+
+    local keep_binary=1
+    if [ -n "$old_core_ver" ] && [ -n "$new_core_ver" ] && [ "$old_core_ver" != "$new_core_ver" ]; then
+        log "DNSCrypt core version upgrade detected: ${old_core_ver} -> ${new_core_ver}. Will download new binary."
+        keep_binary=0
+    fi
+
+    # Preserve local custom overrides, and local binary if it hasn't changed.
+    local keep_files="conf/setup-custom.toml conf/dnscrypt-proxy-custom.toml conf/custom.toml"
+    if [ "$keep_binary" -eq 1 ]; then
+        keep_files="${keep_files} dnscrypt-proxy"
+    fi
+
+    for keep_file in $keep_files; do
         if [ -f "${REMOTE_DIR}/${keep_file}" ]; then
             keep_target="${UPDATE_TMP_DIR}/${keep_file}.keep"
             mkdir -p "$(dirname "$keep_target")"
@@ -243,7 +315,7 @@ perform_update() {
     log "Applying update files to ${REMOTE_DIR}"
     cp -rf "${extracted_root}/"* "$REMOTE_DIR/"
 
-    for keep_file in conf/setup-custom.toml conf/dnscrypt-proxy-custom.toml conf/custom.toml dnscrypt-proxy; do
+    for keep_file in $keep_files; do
         keep_target="${UPDATE_TMP_DIR}/${keep_file}.keep"
         if [ -f "$keep_target" ]; then
             mkdir -p "$(dirname "${REMOTE_DIR}/${keep_file}")"
@@ -251,11 +323,21 @@ perform_update() {
         fi
     done
 
+    # --- Force setup.sh code version to match the tag name ---
+    if [ -f "${REMOTE_DIR}/setup.sh" ]; then
+        sed -i "s|^VERSION=.*|VERSION=\"$latest_tag\"|" "${REMOTE_DIR}/setup.sh"
+        log "Forced local version string in setup.sh to '$latest_tag' to match tag."
+    fi
+
     ensure_script_permissions "$REMOTE_DIR"
 
     log "Running setup.sh in non-interactive mode"
     # Pipe an explicit "no" in case the fetched release contains an older interactive setup.sh.
-    printf 'n\n' | /bin/ash "${REMOTE_DIR}/setup.sh" --non-interactive --keep-binary || return 1
+    local setup_args="--non-interactive"
+    if [ "$keep_binary" -eq 1 ]; then
+        setup_args="${setup_args} --keep-binary"
+    fi
+    printf 'n\n' | /bin/ash "${REMOTE_DIR}/setup.sh" $setup_args || return 1
 
     log "Restarting DNSCrypt service with new scripts"
     /bin/ash "${REMOTE_DIR}/proxy.sh" start -f || return 1

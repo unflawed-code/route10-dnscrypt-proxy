@@ -3,9 +3,9 @@
 
 [dnscrypt]
 # The version of DNSCrypt-Proxy to install.
-version = "2.1.15"
+version = "2.1.16"
 # The official download URL for the ARM64 Linux binary.
-download_url = "https://github.com/DNSCrypt/dnscrypt-proxy/releases/download/2.1.15/dnscrypt-proxy-linux_arm64-2.1.15.tar.gz"
+download_url = "https://github.com/DNSCrypt/dnscrypt-proxy/releases/download/2.1.16/dnscrypt-proxy-linux_arm64-2.1.16.tar.gz"
 
 [upx]
 # UPX is used to compress the DNSCrypt binary to save space on the router.

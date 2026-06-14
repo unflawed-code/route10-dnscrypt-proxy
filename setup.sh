@@ -5,7 +5,7 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-VERSION="v1.1.0"
+VERSION="v3.0.0"
 CRON_FILE="/etc/crontabs/root"
 UPDATER_CRON=""
 FILTER_CRON=""
@@ -101,7 +101,7 @@ fi
 build_setup_run_config
 
 # Load configuration from TOML
-DNSCRYPT_VERSION=$(get_config ".dnscrypt.version" "2.1.15")
+DNSCRYPT_VERSION=$(get_config ".dnscrypt.version" "2.1.16")
 DNSCRYPT_DOWNLOAD_URL=$(get_config ".dnscrypt.download_url" "https://github.com/DNSCrypt/dnscrypt-proxy/releases/download/${DNSCRYPT_VERSION}/dnscrypt-proxy-linux_arm64-${DNSCRYPT_VERSION}.tar.gz")
 UPX_VERSION=$(get_config ".upx.version" "5.1.1")
 UPX_DOWNLOAD_URL=$(get_config ".upx.download_url" "https://github.com/upx/upx/releases/download/v${UPX_VERSION}/upx-${UPX_VERSION}-arm64_linux.tar.xz")
@@ -142,21 +142,37 @@ echo "=== Route10 DNSCrypt-Proxy Setup ($VERSION) ==="
 COMPILED_BINARY="$SCRIPT_DIR/dnscrypt-proxy"
 
 if [ -f "$COMPILED_BINARY" ]; then
-    if [ "$NON_INTERACTIVE" -eq 1 ] || [ "$SKIP_DOWNLOAD" -eq 1 ]; then
-        echo "Non-interactive mode: keeping existing dnscrypt-proxy binary."
-        SKIP_DOWNLOAD=1
+    active_bin_version=""
+    if [ -x "$COMPILED_BINARY" ]; then
+        active_bin_version=$("$COMPILED_BINARY" -version 2>/dev/null | awk '{print $2}' | tr -d '\r[:space:]')
+        [ -z "$active_bin_version" ] && active_bin_version=$("$COMPILED_BINARY" -version 2>/dev/null | tr -dc '0-9.')
+    fi
+
+    if [ "$active_bin_version" = "$DNSCRYPT_VERSION" ]; then
+        if [ "$NON_INTERACTIVE" -eq 1 ] || [ "$SKIP_DOWNLOAD" -eq 1 ]; then
+            echo "Non-interactive mode: keeping existing dnscrypt-proxy binary (version $active_bin_version)."
+            SKIP_DOWNLOAD=1
+        else
+            printf "Found existing compiled binary 'dnscrypt-proxy' (version $active_bin_version). Overwrite it with a fresh download? [y/N]: "
+            read -r overwrite_binary
+            case "$overwrite_binary" in
+                [nN]|[nN][oO]|"")
+                    echo "Skipping download and compilation. Using existing binary."
+                    SKIP_DOWNLOAD=1
+                    ;;
+                *)
+                    echo "Overwriting existing binary..."
+                    ;;
+            esac
+        fi
     else
-        printf "Found existing compiled binary 'dnscrypt-proxy'. Overwrite it with a fresh download? [y/N]: "
-        read -r overwrite_binary
-        case "$overwrite_binary" in
-            [nN]|[nN][oO]|"")
-                echo "Skipping download and compilation. Using existing binary."
-                SKIP_DOWNLOAD=1
-                ;;
-            *)
-                echo "Overwriting existing binary..."
-                ;;
-        esac
+        if [ "$SKIP_DOWNLOAD" -eq 1 ]; then
+            echo "Warning: Keep binary requested, but local version ($active_bin_version) does not match target ($DNSCRYPT_VERSION)."
+            echo "Keeping existing binary as requested."
+        else
+            echo "Active binary version ($active_bin_version) does not match target version ($DNSCRYPT_VERSION). Forcing download."
+            SKIP_DOWNLOAD=0
+        fi
     fi
 fi
 
