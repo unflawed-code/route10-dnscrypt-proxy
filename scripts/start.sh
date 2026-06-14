@@ -475,13 +475,37 @@ main() {
         active_config="/tmp/dnscrypt-proxy/dnscrypt-proxy.run.toml"
     fi
 
-    if ! wait_for_sane_clock; then
-        log "CRITICAL ERROR: System clock is still not sane after ${CLOCK_WAIT_TIMEOUT_SEC}s."
-        log "Aborting to prevent internet loss. Your current DNS remains fully intact."
-        if [ "$dnscrypt_already_running" -eq 0 ]; then
-            killall dnscrypt-proxy 2>/dev/null || true
+    if ! clock_is_sane; then
+        if dnsmasq_uses_dnscrypt_only; then
+            log "System clock is not sane at boot and dnsmasq is configured for DNSCrypt only."
+            log "Temporarily restoring default WAN DNS to enable NTP clock synchronization..."
+            backup_dnsmasq_state
+            uci -q delete "${DNSMASQ_SECTION}.server" 2>/dev/null || true
+            uci -q delete "${DNSMASQ_SECTION}.noresolv" 2>/dev/null || true
+            uci -q delete "${DNSMASQ_SECTION}.allservers" 2>/dev/null || true
+            uci commit dhcp
+            "$DNSMASQ_SERVICE" restart >/dev/null 2>&1 || true
+
+            if ! wait_for_sane_clock; then
+                log "CRITICAL ERROR: System clock is still not sane after ${CLOCK_WAIT_TIMEOUT_SEC}s."
+                log "Aborting startup. Re-applying DNSCrypt-only config..."
+                apply_dnscrypt_dnsmasq_state
+                "$DNSMASQ_SERVICE" restart >/dev/null 2>&1 || true
+                if [ "$dnscrypt_already_running" -eq 0 ]; then
+                    killall dnscrypt-proxy 2>/dev/null || true
+                fi
+                return 1
+            fi
+        else
+            if ! wait_for_sane_clock; then
+                log "CRITICAL ERROR: System clock is still not sane after ${CLOCK_WAIT_TIMEOUT_SEC}s."
+                log "Aborting to prevent internet loss. Your current DNS remains fully intact."
+                if [ "$dnscrypt_already_running" -eq 0 ]; then
+                    killall dnscrypt-proxy 2>/dev/null || true
+                fi
+                return 1
+            fi
         fi
-        return 1
     fi
 
     if [ "$dnscrypt_already_running" -eq 0 ]; then
