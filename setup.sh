@@ -5,7 +5,7 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-VERSION="v3.0.0"
+VERSION="v3.1.0"
 CRON_FILE="/etc/crontabs/root"
 UPDATER_CRON=""
 FILTER_CRON=""
