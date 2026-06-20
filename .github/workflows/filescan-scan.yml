@@ -1,0 +1,54 @@
+name: FileScan.IO Scan
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    name: Upstream binary malware scan
+    runs-on: ubuntu-latest
+    env:
+      FILESCAN_API_KEY: ${{ secrets.FILESCAN_API_KEY }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Download configured upstream artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .filescan-input/dnscrypt .filescan-input/upx
+          mapfile -t urls < <(python3 - <<'PY'
+          import pathlib
+          import tomllib
+
+          config = tomllib.loads(pathlib.Path("conf/setup.toml").read_text(encoding="utf-8"))
+          print(config["dnscrypt"]["download_url"])
+          print(config["upx"]["download_url"])
+          PY
+          )
+
+          curl -fsSL "${urls[0]}" -o .filescan-input/dnscrypt.tar.gz
+          tar -xzf .filescan-input/dnscrypt.tar.gz -C .filescan-input/dnscrypt
+
+          curl -fsSL "${urls[1]}" -o .filescan-input/upx.tar.xz
+          tar -xJf .filescan-input/upx.tar.xz -C .filescan-input/upx
+
+          cp .filescan-input/dnscrypt/linux-arm64/dnscrypt-proxy .filescan-input/dnscrypt-proxy
+          cp .filescan-input/upx/upx-*/upx .filescan-input/upx-bin
+          find .filescan-input -maxdepth 2 -type f -print
+
+      - name: Scan with FileScan.IO
+        shell: bash
+        run: |
+          python3 .github/scripts/filescan_scan.py \
+            .filescan-input/dnscrypt.tar.gz \
+            .filescan-input/upx.tar.xz \
+            .filescan-input/dnscrypt-proxy \
+            .filescan-input/upx-bin
