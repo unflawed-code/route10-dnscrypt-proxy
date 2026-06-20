@@ -1,6 +1,7 @@
 # Route10 DNSCrypt-Proxy
 
 [![Semgrep CE](https://github.com/unflawed-code/route10-dnscrypt-proxy/actions/workflows/semgrep-ce.yml/badge.svg)](https://github.com/unflawed-code/route10-dnscrypt-proxy/actions/workflows/semgrep-ce.yml)
+[![Trivy Scan](https://github.com/unflawed-code/route10-dnscrypt-proxy/actions/workflows/trivy-scan.yml/badge.svg)](https://github.com/unflawed-code/route10-dnscrypt-proxy/actions/workflows/trivy-scan.yml)
 
 A specialized deployment of DNSCrypt-proxy (v2.1.16) optimized for the Alta Labs Route10 router environment.
 
