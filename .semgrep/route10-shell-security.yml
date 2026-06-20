@@ -1,0 +1,85 @@
+rules:
+  - id: route10.shell.remote-pipe-to-shell
+    languages:
+      - generic
+    severity: ERROR
+    message: Remote downloads should be saved, verified, and inspected before execution.
+    paths:
+      include:
+        - "*.sh"
+        - "scripts/*.sh"
+        - "lib/*.sh"
+    pattern-regex: '(?i)\b(?:curl|wget)\b[^\n|]*\|\s*(?:sudo\s+)?(?:/bin/)?(?:sh|ash|bash)\b'
+    metadata:
+      category: security
+      technology:
+        - shell
+      confidence: high
+
+  - id: route10.shell.encoded-payload-execution
+    languages:
+      - generic
+    severity: ERROR
+    message: Encoded data should not be decoded and piped directly into a shell.
+    paths:
+      include:
+        - "*.sh"
+        - "scripts/*.sh"
+        - "lib/*.sh"
+    pattern-regex: '(?i)\b(?:base64|openssl)\b[^\n|]*(?:-d|--decode|enc\s+-d)[^\n|]*\|\s*(?:/bin/)?(?:sh|ash|bash)\b'
+    metadata:
+      category: security
+      technology:
+        - shell
+      confidence: high
+
+  - id: route10.shell.eval-command-substitution
+    languages:
+      - generic
+    severity: WARNING
+    message: Avoid eval on command substitution; it can turn unexpected output into executable shell code.
+    paths:
+      include:
+        - "*.sh"
+        - "scripts/*.sh"
+        - "lib/*.sh"
+    pattern-regex: '\beval\s+["'']?\$\('
+    metadata:
+      category: security
+      technology:
+        - shell
+      confidence: medium
+
+  - id: route10.shell.reverse-shell-pattern
+    languages:
+      - generic
+    severity: ERROR
+    message: Reverse-shell style network execution pattern detected.
+    paths:
+      include:
+        - "*.sh"
+        - "scripts/*.sh"
+        - "lib/*.sh"
+    pattern-regex: '(?i)\b(?:nc|netcat|ncat)\b[^\n]*\s-e\s+(?:/bin/)?(?:sh|ash|bash)\b|/dev/tcp/[A-Za-z0-9_.:-]+/[0-9]+'
+    metadata:
+      category: security
+      technology:
+        - shell
+      confidence: high
+
+  - id: route10.shell.setuid-permission
+    languages:
+      - generic
+    severity: WARNING
+    message: Setting setuid/setgid permissions in deployment scripts is unusual and should be reviewed.
+    paths:
+      include:
+        - "*.sh"
+        - "scripts/*.sh"
+        - "lib/*.sh"
+    pattern-regex: '(?i)\bchmod\s+(?:u\+s|[0-7]*[46][0-7]{3})\b'
+    metadata:
+      category: security
+      technology:
+        - shell
+      confidence: medium
