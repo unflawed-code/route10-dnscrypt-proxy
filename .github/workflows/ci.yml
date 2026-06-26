@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Shell syntax and hermetic tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Check shell syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t shell_files < <(git ls-files '*.sh')
+          for file in "${shell_files[@]}"; do
+            echo "bash -n $file"
+            bash -n "$file"
+          done
+
+      - name: Run hermetic tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tests/test_dnsmasq_cutover.sh
+          sh tests/test_toml_merge.sh

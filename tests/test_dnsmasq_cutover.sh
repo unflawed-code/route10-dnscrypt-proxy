@@ -264,6 +264,7 @@ fi
 
 reset_state
 reset_main_state
+release_start_lock 2>/dev/null || true
 wait_for_sane_clock() { return 1; }
 if main; then
     say_fail "main should fail when clock is not sane before startup"

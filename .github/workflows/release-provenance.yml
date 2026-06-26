@@ -1,0 +1,116 @@
+name: Release Provenance
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build and checksum release artifact
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      hashes: ${{ steps.hash.outputs.hashes }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Check shell syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t shell_files < <(git ls-files '*.sh')
+          for file in "${shell_files[@]}"; do
+            echo "bash -n $file"
+            bash -n "$file"
+          done
+
+      - name: Run hermetic tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tests/test_dnsmasq_cutover.sh
+          sh tests/test_toml_merge.sh
+
+      - name: Build release archive
+        id: build
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME}"
+          if [[ "${GITHUB_REF_TYPE}" != "tag" ]]; then
+            version="manual-${GITHUB_SHA::12}"
+          fi
+          name="${GITHUB_REPOSITORY##*/}-${version}"
+          mkdir -p dist
+          git archive --format=tar.gz --prefix="${name}/" -o "dist/${name}.tar.gz" "${GITHUB_SHA}"
+          (
+            cd dist
+            sha256sum "${name}.tar.gz" > SHA256SUMS
+          )
+          echo "archive_name=${name}.tar.gz" >> "$GITHUB_OUTPUT"
+          sha256sum dist/*
+
+      - name: Generate SLSA subject
+        id: hash
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="${{ steps.build.outputs.archive_name }}"
+          hashes="$(cd dist && sha256sum "$archive" | base64 -w0)"
+          echo "hashes=${hashes}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload release artifacts to workflow
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-artifacts
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 5
+
+  provenance:
+    name: Generate SLSA provenance
+    needs: [build]
+    permissions:
+      actions: read
+      id-token: write
+      contents: write
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.1.0
+    with:
+      base64-subjects: "${{ needs.build.outputs.hashes }}"
+      upload-assets: ${{ startsWith(github.ref, 'refs/tags/') }}
+
+  release:
+    name: Publish release artifacts
+    needs: [build, provenance]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: release-artifacts
+          path: dist
+
+      - name: Publish GitHub release assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if ! gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            gh release create "${GITHUB_REF_NAME}" --title "${GITHUB_REF_NAME}" --notes "Automated release artifacts for ${GITHUB_REF_NAME}."
+          fi
+          gh release upload "${GITHUB_REF_NAME}" dist/* --clobber
