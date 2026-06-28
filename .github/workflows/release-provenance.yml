@@ -2,6 +2,8 @@ name: SLSA Provenance
 
 on:
   push:
+    branches:
+      - main
     tags:
       - "v*"
   workflow_dispatch:
