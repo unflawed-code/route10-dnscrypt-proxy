@@ -1,7 +1,7 @@
 # Route10 DNSCrypt-Proxy
 
 [![CI](https://img.shields.io/github/actions/workflow/status/unflawed-code/route10-dnscrypt-proxy/ci.yml?label=CI)](https://github.com/unflawed-code/route10-dnscrypt-proxy/actions/workflows/ci.yml)
-[![SLSA Provenance](https://github.com/unflawed-code/route10-dnscrypt-proxy/actions/workflows/release-provenance.yml/badge.svg)](SUPPLY_CHAIN.md)
+[![SLSA Provenance](https://img.shields.io/github/actions/workflow/status/unflawed-code/route10-dnscrypt-proxy/release-provenance.yml?branch=main&label=SLSA%20Provenance)](SUPPLY_CHAIN.md)
 [![Semgrep CE](https://img.shields.io/github/actions/workflow/status/unflawed-code/route10-dnscrypt-proxy/semgrep-ce.yml?label=Semgrep%20CE)](https://github.com/unflawed-code/route10-dnscrypt-proxy/actions/workflows/semgrep-ce.yml)
 [![FileScan.IO Scan](https://img.shields.io/github/actions/workflow/status/unflawed-code/route10-dnscrypt-proxy/filescan-scan.yml?label=FileScan.IO%20Scan)](https://github.com/unflawed-code/route10-dnscrypt-proxy/actions/workflows/filescan-scan.yml)
 
