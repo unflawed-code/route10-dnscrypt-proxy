@@ -1,4 +1,4 @@
-name: Release Provenance
+name: SLSA Provenance
 
 on:
   push:

@@ -1,6 +1,6 @@
 # Supply Chain Verification
 
-This repo uses the official SLSA GitHub Generator for release artifacts produced by the `Release Provenance` workflow:
+This repo uses the official SLSA GitHub Generator for release artifacts produced by the `SLSA Provenance` workflow:
 
 - CI runs shell syntax checks and hermetic tests.
 - Tags matching `v*` build a release tarball from the exact Git commit.
