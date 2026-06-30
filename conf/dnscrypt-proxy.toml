@@ -2,7 +2,7 @@
 # To override settings, place a 'custom.toml' file in the directory.
 # It will be automatically merged by start.sh at runtime.
 
-server_names = ['cloudflare']
+server_names = ['quad9-dnscrypt-ip4-filter-pri', 'quad9-dnscrypt-ip6-filter-pri']
 listen_addresses = ['127.0.0.1:5059']
 
 # IPv6 Support
