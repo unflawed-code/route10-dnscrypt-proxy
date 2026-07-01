@@ -1,0 +1,154 @@
+name: Upstream Dependency Watch
+
+on:
+  schedule:
+    - cron: "17 21 * * 0"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check:
+    name: Check pinned upstream versions
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check upstream releases
+        id: deps
+        shell: bash
+        run: |
+          python3 <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          import re
+          import sys
+          import tomllib
+          import urllib.error
+          import urllib.request
+          from pathlib import Path
+
+          dependencies = [
+              {
+                  "name": "DNSCrypt Proxy",
+                  "repo": "DNSCrypt/dnscrypt-proxy",
+                  "current": None,
+                  "tag_prefix": "",
+                  "source": "conf/setup.toml [dnscrypt].version",
+              },
+              {
+                  "name": "UPX",
+                  "repo": "upx/upx",
+                  "current": None,
+                  "tag_prefix": "v",
+                  "source": "conf/setup.toml [upx].version",
+              },
+          ]
+
+          with Path("conf/setup.toml").open("rb") as fh:
+              setup = tomllib.load(fh)
+          dependencies[0]["current"] = str(setup["dnscrypt"]["version"])
+          dependencies[1]["current"] = str(setup["upx"]["version"])
+
+          def github_json(path):
+              req = urllib.request.Request(
+                  f"https://api.github.com{path}",
+                  headers={"Accept": "application/vnd.github+json", "User-Agent": "route10-dependency-watch"},
+              )
+              with urllib.request.urlopen(req, timeout=30) as response:
+                  return json.load(response)
+
+          def normalize(tag, prefix=""):
+              tag = tag.strip()
+              if prefix and tag.startswith(prefix):
+                  tag = tag[len(prefix):]
+              return tag.lstrip("v")
+
+          def version_key(version):
+              base = normalize(version)
+              nums = [int(part) for part in re.findall(r"\d+", base)[:4]]
+              nums.extend([0] * (4 - len(nums)))
+              prerelease = 0 if re.search(r"(alpha|beta|rc|pre)", base, re.I) else 1
+              return (*nums, prerelease, base)
+
+          def latest_tag(repo, prefix=""):
+              try:
+                  release = github_json(f"/repos/{repo}/releases/latest")
+                  tag = release.get("tag_name", "")
+                  if tag:
+                      return tag
+              except urllib.error.HTTPError:
+                  pass
+
+              tags = github_json(f"/repos/{repo}/tags?per_page=100")
+              candidates = []
+              for item in tags:
+                  tag = item.get("name", "")
+                  cleaned = normalize(tag, prefix)
+                  if re.fullmatch(r"\d+(?:\.\d+){1,3}(?:[-_A-Za-z0-9.]*)?", cleaned):
+                      candidates.append(tag)
+              if not candidates:
+                  raise RuntimeError(f"No version-like tags found for {repo}")
+              return max(candidates, key=lambda tag: version_key(normalize(tag, prefix)))
+
+          outdated = []
+          checked = []
+          for dep in dependencies:
+              latest = latest_tag(dep["repo"], dep["tag_prefix"])
+              current_normalized = normalize(dep["current"], dep["tag_prefix"])
+              latest_normalized = normalize(latest, dep["tag_prefix"])
+              item = {
+                  **dep,
+                  "latest": latest,
+                  "current_normalized": current_normalized,
+                  "latest_normalized": latest_normalized,
+                  "url": f"https://github.com/{dep['repo']}/releases/latest",
+              }
+              checked.append(item)
+              if version_key(latest_normalized) > version_key(current_normalized):
+                  outdated.append(item)
+
+          lines = [
+              "Pinned upstream dependency updates are available.",
+              "",
+              "| Dependency | Current | Latest | Source |",
+              "| --- | --- | --- | --- |",
+          ]
+          for dep in outdated:
+              lines.append(
+                  f"| [{dep['name']}]({dep['url']}) | `{dep['current']}` | `{dep['latest']}` | `{dep['source']}` |"
+              )
+          if outdated:
+              lines.extend([
+                  "",
+                  "Dependabot is enabled for supported GitHub ecosystems. These binary release pins are tracked by this workflow because Dependabot does not natively update arbitrary TOML release URLs.",
+              ])
+          else:
+              lines = ["All tracked upstream dependencies are current."]
+
+          Path("dependency-updates.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+          print(f"has_updates={str(bool(outdated)).lower()}")
+          print("checked=" + json.dumps(checked))
+          PY
+
+      - name: Open or update dependency issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          title="Upstream dependency updates available"
+          existing="$(gh issue list --state open --search "${title} in:title" --json number --jq '.[0].number // empty')"
+
+          if [ "${{ steps.deps.outputs.has_updates }}" = "true" ]; then
+            if [ -n "$existing" ]; then
+              gh issue edit "$existing" --body-file dependency-updates.md
+            else
+              gh issue create --title "$title" --body-file dependency-updates.md
+            fi
+          elif [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "All tracked upstream dependencies are current. Closing this dependency watch issue."
+            gh issue close "$existing" --reason completed
+          fi
+
