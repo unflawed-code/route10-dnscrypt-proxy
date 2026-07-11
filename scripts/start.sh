@@ -198,7 +198,7 @@ build_run_config() {
     # Extract keys already defined in the current run config to enable filtering
     _get_keys() {
         [ -f "$1" ] || return
-        awk '/^\[/ {exit} /^[a-z_]+[ ]*=/ {split($1, a, "="); print a[1]}' "$1" | tr -d ' '
+        awk '/^\[/ {exit} /^[a-z_]+[ ]*=/ {split($1, a, "="); print a[1]}' "$1" | tr -d ' \r'
     }
 
     # Layer in custom.toml root keys (filtering out duplicates found in custom2)
