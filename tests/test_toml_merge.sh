@@ -31,7 +31,7 @@ merge_proxy_config() {
 
     _get_keys() {
         [ -f "$1" ] || return
-        awk '/^\[/ {exit} /^[a-z_]+[ ]*=/ {split($1, a, "="); print a[1]}' "$1" | tr -d ' ' | tr -d '\r'
+        awk '/^\[/ {exit} /^[a-z0-9_]+[ ]*=/ {split($1, a, "="); print a[1]}' "$1" | tr -d ' ' | tr -d '\r'
     }
 
     if [ -f "$custom1" ]; then
