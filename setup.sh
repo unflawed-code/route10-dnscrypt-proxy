@@ -5,7 +5,7 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-VERSION="v3.3.0"
+VERSION="v3.3.1"
 CRON_FILE="/etc/crontabs/root"
 UPDATER_CRON=""
 FILTER_CRON=""
@@ -224,15 +224,6 @@ fi
 # Ensure shell entrypoints remain executable
 ensure_project_script_permissions
 chmod +x "$SCRIPT_DIR/dnscrypt-proxy" 2>/dev/null || true
-
-# Configure post-cfg.sh integration
-echo "Configuring boot integration in $POST_CFG..."
-
-if [ ! -f "$POST_CFG" ]; then
-    echo "Creating new $POST_CFG..."
-    echo "#!/bin/ash" > "$POST_CFG"
-    chmod 700 "$POST_CFG"
-fi
 
 # Configure post-cfg.sh integration
 echo "Configuring boot integration in $POST_CFG..."

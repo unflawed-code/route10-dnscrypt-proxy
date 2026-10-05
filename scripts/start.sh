@@ -15,7 +15,7 @@ SCRIPT_DIR="$PROJECT_DIR"
 SCRIPTS_DIR="$PROJECT_DIR/scripts"
 LOG_FILE=/var/log/dnscrypt-proxy.log
 PORT=5059
-VERSION="v1.1.0"
+VERSION="v3.3.1"
 RUN_CONFIG="/tmp/dnscrypt-proxy/dnscrypt-proxy.run.toml"
 DNSMASQ_SECTION="dhcp.@dnsmasq[0]"
 DNSMASQ_SERVICE="${DNSMASQ_SERVICE:-/etc/init.d/dnsmasq}"
@@ -537,7 +537,7 @@ main() {
 
     log "Success: DNSCrypt is actively resolving queries independently."
 
-    if [ -n "$BLOCKED_NAMES_SOURCES" ] && [ "${DNSCRYPT_SKIP_FILTER_BOOT_UPDATE:-0}" != "1" ]; then
+    if [ "$dnscrypt_already_running" -eq 0 ] && [ -n "$BLOCKED_NAMES_SOURCES" ] && [ "${DNSCRYPT_SKIP_FILTER_BOOT_UPDATE:-0}" != "1" ]; then
         log "Blocklist sources detected: $(printf '%s\n' "$BLOCKED_NAMES_SOURCES" | sed '/^$/d' | wc -l | tr -d ' ')"
         log "Refreshing DNS blocklists after DNSCrypt is live..."
         /bin/ash "$PROJECT_DIR/proxy.sh" update-filters >/dev/null 2>&1 || log "Warning: blocklist refresh failed; will retry via cron."
