@@ -5,7 +5,7 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-VERSION="v3.3.1"
+VERSION="v3.4.0"
 CRON_FILE="/etc/crontabs/root"
 UPDATER_CRON=""
 FILTER_CRON=""
@@ -101,7 +101,7 @@ fi
 build_setup_run_config
 
 # Load configuration from TOML
-DNSCRYPT_VERSION=$(get_config ".dnscrypt.version" "2.1.18")
+DNSCRYPT_VERSION=$(get_config ".dnscrypt.version" "2.1.20")
 DNSCRYPT_DOWNLOAD_URL=$(get_config ".dnscrypt.download_url" "https://github.com/DNSCrypt/dnscrypt-proxy/releases/download/${DNSCRYPT_VERSION}/dnscrypt-proxy-linux_arm64-${DNSCRYPT_VERSION}.tar.gz")
 UPX_VERSION=$(get_config ".upx.version" "5.2.0")
 UPX_DOWNLOAD_URL=$(get_config ".upx.download_url" "https://github.com/upx/upx/releases/download/v${UPX_VERSION}/upx-${UPX_VERSION}-arm64_linux.tar.xz")
