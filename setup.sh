@@ -103,7 +103,7 @@ build_setup_run_config
 # Load configuration from TOML
 DNSCRYPT_VERSION=$(get_config ".dnscrypt.version" "2.1.20")
 DNSCRYPT_DOWNLOAD_URL=$(get_config ".dnscrypt.download_url" "https://github.com/DNSCrypt/dnscrypt-proxy/releases/download/${DNSCRYPT_VERSION}/dnscrypt-proxy-linux_arm64-${DNSCRYPT_VERSION}.tar.gz")
-UPX_VERSION=$(get_config ".upx.version" "5.2.0")
+UPX_VERSION=$(get_config ".upx.version" "5.2.1")
 UPX_DOWNLOAD_URL=$(get_config ".upx.download_url" "https://github.com/upx/upx/releases/download/v${UPX_VERSION}/upx-${UPX_VERSION}-arm64_linux.tar.xz")
 COMPRESS_BINARY=$(get_config ".settings.compress_binary" "1")
 TMP_DIR=$(get_config ".settings.tmp_dir" "/tmp/dnscrypt-setup")

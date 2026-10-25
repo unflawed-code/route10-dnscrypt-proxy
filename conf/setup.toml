@@ -9,8 +9,8 @@ download_url = "https://github.com/DNSCrypt/dnscrypt-proxy/releases/download/2.1
 
 [upx]
 # UPX is used to compress the DNSCrypt binary to save space on the router.
-version = "5.2.0"
-download_url = "https://github.com/upx/upx/releases/download/v5.2.0/upx-5.2.0-arm64_linux.tar.xz"
+version = "5.2.1"
+download_url = "https://github.com/upx/upx/releases/download/v5.2.1/upx-5.2.1-arm64_linux.tar.xz"
 
 [settings]
 # 1 = Enable binary compression via UPX, 0 = Disable.
