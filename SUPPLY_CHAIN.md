@@ -17,9 +17,77 @@ For tag `vX.Y.Z`, the release workflow publishes:
 
 ```text
 route10-dnscrypt-proxy-vX.Y.Z.tar.gz
+route10-dnscrypt-proxy-vX.Y.Z.tar.gz.sig   (added by hand, see below)
 SHA256SUMS
 *.intoto.jsonl
 ```
+
+## Update-Boundary Trust: Release Signatures
+
+Checksums and provenance both come from the same place as the artifact, so a
+compromised repository can publish all three consistently. The device updater
+(`scripts/updater.sh`) therefore requires a **detached signature** over the
+release archive, verified against a public key it already holds.
+
+- `lib/vendor/route10-signature.sh` - vendored copy of
+  `route10-update-verifier` 1.0.0, pinned by
+  `lib/vendor/route10-signature.sh.sha256`. CI runs `sha256sum -c` on it, so a
+  hand-edited verifier cannot ship. Never edit these two files by hand; re-run
+  `sync-verifier.sh` from the upstream project instead.
+- `conf/release-pub.pem` - the trust anchor. The updater restores this file
+  after applying a release and refuses to update when the signature, the
+  `.sig` asset, or this key is missing.
+
+The updater downloads `route10-dnscrypt-proxy-<tag>.tar.gz` and its `.sig`
+from the release assets, and verifies the signature **before** extracting or
+writing anything into the install tree. There is no "allow unverified" flag.
+
+### First update on a device without the key
+
+A device installed before this check existed has no `conf/release-pub.pem`,
+and the old updater replaces itself before it applies any file, so the key
+cannot arrive ahead of the first hardened run. In that one case the updater
+unpacks **only** `conf/release-pub.pem` and `lib/vendor/route10-signature.sh`
+from the release, verifies the archive signature with that key, and stops if it
+does not match. The key is then pinned in the install tree (it is in
+`keep_files`, so no later release can replace it) and every subsequent update
+is anchored.
+
+This is trust on first use, and it is bounded to that single update - the same
+trust the pre-hardening updater granted on every update. Install the key out of
+band first to skip it entirely:
+
+```bash
+scp conf/release-pub.pem root@<device>:/cfg/dnscrypt-proxy/conf/
+```
+
+### Signing a release
+
+The private key is offline and never committed, never in CI, never on a router:
+
+```bash
+openssl ecparam -name prime256v1 -genkey -noout -out .release-keys/release-signing-key.pem
+openssl ec -in .release-keys/release-signing-key.pem -pubout
+# put the printed key in conf/release-pub.pem
+```
+
+`.release-keys/` is excluded via `.git/info/exclude`. For each tag:
+
+```bash
+gh release download vX.Y.Z --repo unflawed-code/route10-dnscrypt-proxy \
+  -p 'route10-dnscrypt-proxy-*.tar.gz'
+./scripts/sign-release.sh route10-dnscrypt-proxy-vX.Y.Z.tar.gz
+gh release upload vX.Y.Z route10-dnscrypt-proxy-vX.Y.Z.tar.gz.sig
+```
+
+`sign-release.sh` verifies the signature against `conf/release-pub.pem` before
+exiting, so a wrong key fails on the workstation instead of on every router.
+
+### Rotating the key
+
+Ship the new public key out of band (SSH to the device, write
+`conf/release-pub.pem`), then sign later releases with the new private key.
+Rotation cannot travel through the update channel - that is the point.
 
 ## Verify A Release
 

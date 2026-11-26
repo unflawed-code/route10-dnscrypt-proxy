@@ -38,7 +38,9 @@ assert_eq() {
 }
 
 reset_state() {
-    UCI_SERVERS=$'127.0.0.1#5053\n127.0.0.1#5054\n127.0.0.1#5055'
+    # Real `uci get` renders a list as one space-separated line, not newlines.
+    UCI_SERVERS='127.0.0.1#5053 127.0.0.1#5054 127.0.0.1#5055'
+    UCI_SERVER_ITEMS=3
     UCI_NORESOLV='0'
     UCI_ALLSERVERS='1'
     UCI_COMMITS=0
@@ -104,7 +106,7 @@ uci() {
             ;;
         delete)
             case "$2" in
-                dhcp.@dnsmasq\[0\].server) UCI_SERVERS="" ;;
+                dhcp.@dnsmasq\[0\].server) UCI_SERVERS="" ; UCI_SERVER_ITEMS=0 ;;
                 dhcp.@dnsmasq\[0\].noresolv) UCI_NORESOLV="" ;;
                 dhcp.@dnsmasq\[0\].allservers) UCI_ALLSERVERS="" ;;
                 *)
@@ -117,8 +119,10 @@ uci() {
             case "$2" in
                 dhcp.@dnsmasq\[0\].server=*)
                     local value="${2#*=}"
+                    UCI_SERVER_ITEMS=$((UCI_SERVER_ITEMS + 1))
+                    # Mirror real uci: list items are joined with spaces.
                     if [ -n "$UCI_SERVERS" ]; then
-                        UCI_SERVERS="${UCI_SERVERS}"$'\n'"${value}"
+                        UCI_SERVERS="${UCI_SERVERS} ${value}"
                     else
                         UCI_SERVERS="${value}"
                     fi
@@ -200,6 +204,7 @@ echo "=== Running dnsmasq cutover safety tests ==="
 reset_state
 if reconfigure_dnsmasq_safely; then
     assert_eq "127.0.0.1#5059" "$UCI_SERVERS" "cutover removes stale upstreams and leaves only dnscrypt"
+    assert_eq "1" "$UCI_SERVER_ITEMS" "cutover leaves exactly one upstream list item"
     assert_eq "1" "$UCI_NORESOLV" "cutover forces noresolv=1"
     assert_eq "0" "$UCI_ALLSERVERS" "cutover disables allservers"
     assert_eq "1" "$DNSMASQ_RESTARTS" "cutover restarts dnsmasq once on success"
@@ -212,7 +217,8 @@ DNSMASQ_RUNTIME_OK=0
 if reconfigure_dnsmasq_safely; then
     say_fail "cutover failure path unexpectedly succeeded"
 else
-    assert_eq $'127.0.0.1#5053\n127.0.0.1#5054\n127.0.0.1#5055' "$UCI_SERVERS" "rollback restores previous upstream servers"
+    assert_eq '127.0.0.1#5053 127.0.0.1#5054 127.0.0.1#5055' "$UCI_SERVERS" "rollback restores previous upstream servers"
+    assert_eq "3" "$UCI_SERVER_ITEMS" "rollback restores each upstream as a separate list item"
     assert_eq "0" "$UCI_NORESOLV" "rollback restores previous noresolv value"
     assert_eq "1" "$UCI_ALLSERVERS" "rollback restores previous allservers value"
     assert_eq "2" "$DNSMASQ_RESTARTS" "rollback restarts dnsmasq after restoring state"
@@ -222,6 +228,7 @@ reset_state
 reset_main_state
 PS_HAS_DNSCRYPT=1
 UCI_SERVERS="127.0.0.1#5059"
+UCI_SERVER_ITEMS=1
 UCI_NORESOLV="1"
 UCI_ALLSERVERS="0"
 if main; then

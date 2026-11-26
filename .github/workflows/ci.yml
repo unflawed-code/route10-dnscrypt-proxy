@@ -27,9 +27,17 @@ jobs:
             bash -n "$file"
           done
 
+      - name: Verify vendored signature verifier digest
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd lib/vendor
+          sha256sum -c route10-signature.sh.sha256
+
       - name: Run hermetic tests
         shell: bash
         run: |
           set -euo pipefail
           bash tests/test_dnsmasq_cutover.sh
           sh tests/test_toml_merge.sh
+          sh tests/test_signature_verify.sh

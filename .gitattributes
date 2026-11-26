@@ -8,4 +8,6 @@
 **/*.sh text eol=lf
 **/*.lua text eol=lf
 **/*.toml text eol=lf
+**/*.pem text eol=lf
+**/*.sha256 text eol=lf
 dnscrypt-proxy.logrotate text eol=lf

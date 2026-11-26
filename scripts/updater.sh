@@ -15,6 +15,10 @@ LOG_FILE="/var/log/dnscrypt-proxy-updater.log"
 GITHUB_REPO="unflawed-code/route10-dnscrypt-proxy"
 LATEST_RELEASE_URL="https://api.github.com/repos/${GITHUB_REPO}/releases/latest"
 WEB_LATEST_URL="https://github.com/${GITHUB_REPO}/releases/latest"
+RELEASE_DOWNLOAD_BASE="https://github.com/${GITHUB_REPO}/releases/download"
+RELEASE_ASSET_PREFIX="route10-dnscrypt-proxy"
+RELEASE_PUBKEY_REL="conf/release-pub.pem"
+VENDOR_VERIFIER_REL="lib/vendor/route10-signature.sh"
 INSTALL_VERSION_FILE="${REMOTE_DIR}/.installed-version"
 SELF_SHELL="/bin/ash"
 [ -x "$SELF_SHELL" ] || SELF_SHELL="/bin/sh"
@@ -23,6 +27,7 @@ ORIGINAL_ARGS="$*"
 UPDATE_SUCCESS=0
 UPDATE_TMP_DIR=""
 UPDATE_BACKUP_DIR=""
+APPLY_STARTED=0
 PARITY_VERSION=""
 
 log() {
@@ -106,13 +111,97 @@ reconcile_version_parity() {
 
 fetch_url() {
     local url="$1"
-    if command -v wget >/dev/null 2>&1; then
-        wget --no-check-certificate -qO- "$url"
-    elif command -v curl >/dev/null 2>&1; then
+    # TLS is never disabled: the signature is the trust anchor, but an
+    # unvalidated transport should not be an accepted fallback.
+    if command -v curl >/dev/null 2>&1; then
         curl -fsSL "$url"
+    elif command -v wget >/dev/null 2>&1; then
+        wget -qO- "$url"
     else
         return 1
     fi
+}
+
+download_file() {
+    local url="$1"
+    local dest="$2"
+
+    rm -f "$dest"
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL "$url" -o "$dest" || return 1
+    elif command -v wget >/dev/null 2>&1; then
+        wget -q "$url" -O "$dest" || return 1
+    else
+        log "ERROR: Neither curl nor wget is available."
+        return 1
+    fi
+
+    [ -s "$dest" ]
+}
+
+validate_release_tag() {
+    local tag="$1"
+
+    [ -n "$tag" ] || return 1
+    # The tag is interpolated into URLs and into setup.sh, so accept only the
+    # vMAJOR.MINOR.PATCH[-suffix] shape this project publishes.
+    printf '%s' "$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([._-][A-Za-z0-9.]+)?$' || return 1
+    case "$tag" in
+        *..*|*/*) return 1 ;;
+    esac
+    return 0
+}
+
+verify_release_signature() {
+    local archive="$1"
+    local signature="$2"
+    local pubkey="$3"
+    local vendor_dir="${UPDATE_VERIFY_VENDOR_DIR:-${REMOTE_DIR}/lib/vendor}"
+    local verifier="${vendor_dir}/route10-signature.sh"
+    local out
+
+    if [ ! -f "$verifier" ]; then
+        log "ERROR: Vendored signature verifier missing (${VENDOR_VERIFIER_REL}). Refusing update."
+        return 1
+    fi
+
+    # shellcheck source=/dev/null
+    . "$verifier"
+    if ! command -v update_verify_signature >/dev/null 2>&1; then
+        log "ERROR: Signature verifier did not define update_verify_signature. Refusing update."
+        return 1
+    fi
+
+    if ! out=$(update_verify_signature "$archive" "$signature" "$pubkey"); then
+        log "ERROR: Release signature verification failed: ${out}"
+        return 1
+    fi
+    log "Release signature verified: ${out}"
+    return 0
+}
+
+stage_trust_anchor() {
+    local archive="$1"
+    local stage_dir="${UPDATE_TMP_DIR}/trust-anchor"
+    local key_member
+    local verifier_member
+
+    log "WARNING: No local trust anchor (${RELEASE_PUBKEY_REL}); bootstrapping it from this release."
+    log "WARNING: The key is pinned on this device from this update onwards; every later release must match it."
+
+    key_member="$(tar -tzf "$archive" 2>/dev/null | grep -m1 "/${RELEASE_PUBKEY_REL}\$" || true)"
+    verifier_member="$(tar -tzf "$archive" 2>/dev/null | grep -m1 "/${VENDOR_VERIFIER_REL}\$" || true)"
+    [ -n "$key_member" ] && [ -n "$verifier_member" ] || return 1
+
+    rm -rf "$stage_dir"
+    mkdir -p "$stage_dir" || return 1
+    # Unpack only the anchor and the verifier: the rest of the archive stays
+    # compressed until the signature over it has been checked.
+    tar -xzf "$archive" -C "$stage_dir" "$key_member" "$verifier_member" || return 1
+
+    [ -s "${stage_dir}/${key_member}" ] || return 1
+    cp -f "${stage_dir}/${key_member}" "${UPDATE_TMP_DIR}/release-pub.pem" || return 1
+    UPDATE_VERIFY_VENDOR_DIR="$(dirname "${stage_dir}/${verifier_member}")"
 }
 
 extract_first_tag() {
@@ -201,7 +290,9 @@ rollback_update() {
 }
 
 cleanup_trap() {
-    if [ "$UPDATE_SUCCESS" -eq 0 ] && [ -n "$UPDATE_BACKUP_DIR" ]; then
+    # Only roll back when the live tree was actually being rewritten; a failed
+    # download or signature check must never touch the running install.
+    if [ "$UPDATE_SUCCESS" -eq 0 ] && [ "$APPLY_STARTED" -eq 1 ] && [ -n "$UPDATE_BACKUP_DIR" ]; then
         rollback_update "$UPDATE_BACKUP_DIR" || true
     fi
     if [ -n "$UPDATE_TMP_DIR" ]; then
@@ -224,15 +315,26 @@ ensure_script_permissions() {
 
 perform_update() {
     local latest_tag="$1"
-    local archive_url="https://github.com/${GITHUB_REPO}/archive/refs/tags/${latest_tag}.tar.gz"
+    local asset_name
+    local release_url
     local archive_path
+    local signature_path
     local extracted_root
     local keep_file
     local keep_target
 
+    if ! validate_release_tag "$latest_tag"; then
+        log "ERROR: Refusing unexpected release tag '${latest_tag}'."
+        return 1
+    fi
+
+    asset_name="${RELEASE_ASSET_PREFIX}-${latest_tag}.tar.gz"
+    release_url="${RELEASE_DOWNLOAD_BASE}/${latest_tag}"
+
     UPDATE_TMP_DIR="/tmp/dnscrypt-proxy-update"
     UPDATE_BACKUP_DIR="/tmp/dnscrypt-proxy-backup"
     archive_path="${UPDATE_TMP_DIR}/update.tar.gz"
+    signature_path="${archive_path}.sig"
 
     rm -rf "$UPDATE_TMP_DIR" "$UPDATE_BACKUP_DIR"
     mkdir -p "$UPDATE_TMP_DIR" "$UPDATE_BACKUP_DIR"
@@ -242,15 +344,34 @@ perform_update() {
 
     trap cleanup_trap EXIT
 
-    log "Downloading ${archive_url}"
-    if command -v curl >/dev/null 2>&1; then
-        curl -sL "$archive_url" -o "$archive_path" || return 1
-    elif command -v wget >/dev/null 2>&1; then
-        wget --no-check-certificate -q "$archive_url" -O "$archive_path" || return 1
-    else
-        log "ERROR: Neither curl nor wget is available."
+    # Signed release asset, not the unsigned source tarball at
+    # archive/refs/tags/ - the signature only exists for what CI built.
+    log "Downloading ${release_url}/${asset_name}"
+    download_file "${release_url}/${asset_name}" "$archive_path" || {
+        log "ERROR: Download failed: ${asset_name}. Refusing update."
+        return 1
+    }
+
+    log "Downloading ${asset_name}.sig"
+    download_file "${release_url}/${asset_name}.sig" "$signature_path" || {
+        log "ERROR: Download failed: ${asset_name}.sig. Refusing update."
+        return 1
+    }
+
+    if [ -s "${REMOTE_DIR}/${RELEASE_PUBKEY_REL}" ]; then
+        cp -f "${REMOTE_DIR}/${RELEASE_PUBKEY_REL}" "${UPDATE_TMP_DIR}/release-pub.pem" || return 1
+    elif ! stage_trust_anchor "$archive_path"; then
+        # The anchor cannot travel over the channel it protects, so a device
+        # that has never held it pins one once, from a release it verifies with
+        # that same key before the live tree is touched. Refusing outright is
+        # the only alternative, and it leaves such a device unable to update.
+        log "ERROR: Release public key missing (${RELEASE_PUBKEY_REL}) and absent from the release. Refusing update."
         return 1
     fi
+
+    # Fail closed, and only once the archive bytes are proven: nothing has been
+    # extracted or written into the live tree at this point.
+    verify_release_signature "$archive_path" "$signature_path" "${UPDATE_TMP_DIR}/release-pub.pem" || return 1
 
     log "Extracting update archive"
     tar -xzf "$archive_path" -C "$UPDATE_TMP_DIR" || return 1
@@ -299,7 +420,9 @@ perform_update() {
     fi
 
     # Preserve local custom overrides, and local binary if it hasn't changed.
-    local keep_files="conf/setup-custom.toml conf/dnscrypt-proxy-custom.toml conf/custom.toml"
+    # The trusted public key is restored after the copy: if a release could
+    # replace it, an attacker could ship their own key and archive.
+    local keep_files="conf/setup-custom.toml conf/dnscrypt-proxy-custom.toml conf/custom.toml ${RELEASE_PUBKEY_REL}"
     if [ "$keep_binary" -eq 1 ]; then
         keep_files="${keep_files} dnscrypt-proxy"
     fi
@@ -313,6 +436,7 @@ perform_update() {
     done
 
     log "Applying update files to ${REMOTE_DIR}"
+    APPLY_STARTED=1
     cp -rf "${extracted_root}/"* "$REMOTE_DIR/"
 
     for keep_file in $keep_files; do
@@ -362,6 +486,11 @@ check_and_update() {
         return 1
     }
 
+    if ! validate_release_tag "$latest_tag"; then
+        log "ERROR: Unexpected release tag '${latest_tag}'. Refusing update."
+        return 1
+    fi
+
     if version_gt "$latest_tag" "$local_version" || [ "$force" = "1" ]; then
         [ "$force" = "1" ] && log "Force update requested." || log "New release available (${local_version} -> ${latest_tag})."
         perform_update "$latest_tag"
@@ -369,6 +498,11 @@ check_and_update() {
         log "No updates found."
     fi
 }
+
+# Allow tests to source the helpers without starting an update.
+if [ "${UPDATER_LIB_ONLY:-0}" = "1" ]; then
+    return 0 2>/dev/null || exit 0
+fi
 
 cmd="${1:-check}"
 case "$cmd" in

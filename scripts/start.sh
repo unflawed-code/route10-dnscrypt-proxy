@@ -15,7 +15,7 @@ SCRIPT_DIR="$PROJECT_DIR"
 SCRIPTS_DIR="$PROJECT_DIR/scripts"
 LOG_FILE=/var/log/dnscrypt-proxy.log
 PORT=5059
-VERSION="v3.4.0"
+VERSION="v3.4.1"
 RUN_CONFIG="/tmp/dnscrypt-proxy/dnscrypt-proxy.run.toml"
 DNSMASQ_SECTION="dhcp.@dnsmasq[0]"
 DNSMASQ_SERVICE="${DNSMASQ_SERVICE:-/etc/init.d/dnsmasq}"
@@ -94,19 +94,17 @@ backup_dnsmasq_state() {
 }
 
 restore_dnsmasq_state() {
-    local old_ifs
     local server
 
     uci -q delete "${DNSMASQ_SECTION}.server" 2>/dev/null || true
     if [ -n "$BACKUP_DNSMASQ_SERVERS" ]; then
-        old_ifs="$IFS"
-        IFS='
-'
+        # `uci get` renders a list on a single space-separated line (this uci
+        # does not expand `-d` escapes), so split on the default IFS instead of
+        # newlines; the default IFS also handles newline-separated input.
         for server in $BACKUP_DNSMASQ_SERVERS; do
             [ -n "$server" ] || continue
             uci add_list "${DNSMASQ_SECTION}.server=${server}"
         done
-        IFS="$old_ifs"
     fi
     set_uci_option_or_delete "${DNSMASQ_SECTION}.noresolv" "$BACKUP_DNSMASQ_NORESOLV"
     set_uci_option_or_delete "${DNSMASQ_SECTION}.allservers" "$BACKUP_DNSMASQ_ALLSERVERS"
