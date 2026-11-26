@@ -21,6 +21,14 @@ API_BASE = "https://www.filescan.io"
 DEFAULT_POLL_SECONDS = 15
 DEFAULT_MAX_POLLS = 40
 FAIL_VERDICTS = {"suspicious", "likely_malicious", "malicious"}
+# FileScan.IO sits behind Cloudflare, which rejects Python's default
+# `Python-urllib/x.y` agent with `403 error code: 1010` (banned browser
+# signature) before the request ever reaches the API. Identify the client
+# explicitly so the scan reaches the API instead of failing on the WAF.
+USER_AGENT = (
+    "route10-dnscrypt-proxy-filescan/1.0 "
+    "(+https://github.com/unflawed-code/route10-dnscrypt-proxy)"
+)
 
 
 class FileScanClient:
@@ -35,7 +43,11 @@ class FileScanClient:
         data: bytes | None = None,
         headers: dict[str, str] | None = None,
     ) -> dict[str, object]:
-        req_headers = {"X-Api-Key": self.api_key}
+        req_headers = {
+            "X-Api-Key": self.api_key,
+            "User-Agent": USER_AGENT,
+            "Accept": "application/json",
+        }
         if headers:
             req_headers.update(headers)
         request = urllib.request.Request(
