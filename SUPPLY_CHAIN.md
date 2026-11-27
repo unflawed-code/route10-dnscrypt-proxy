@@ -154,7 +154,7 @@ slsa-verifier verify-artifact "route10-dnscrypt-proxy-$tag.tar.gz" \
   --source-tag "$tag"
 ```
 
-The verifier should confirm that the artifact was produced by `github.com/unflawed-code/route10-dnscrypt-proxy` from the expected tag.
+The verifier should confirm that the artifact was produced by `github.com/unflawed-code/route10-dnscrypt-proxy` from the expected tag. CI runs this same command (pinned to `slsa-verifier` v2.7.1) when it publishes a release, so a tag whose provenance does not verify fails the release job.
 
 ### 4. Signature
 

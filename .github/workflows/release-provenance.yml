@@ -135,3 +135,22 @@ jobs:
           fi
 
           gh release upload "${GITHUB_REF_NAME}" dist/* --clobber
+
+      - name: Verify provenance with slsa-verifier
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          archive="$(ls dist/*.tar.gz)"
+          gh release download "${tag}" --pattern '*.intoto.jsonl' --dir provenance --clobber
+          provenance="$(ls provenance/*.intoto.jsonl)"
+          curl -fsSL -o "${RUNNER_TEMP}/slsa-verifier" \
+            https://github.com/slsa-framework/slsa-verifier/releases/download/v2.7.1/slsa-verifier-linux-amd64
+          chmod +x "${RUNNER_TEMP}/slsa-verifier"
+          "${RUNNER_TEMP}/slsa-verifier" verify-artifact "${archive}" \
+            --provenance-path "${provenance}" \
+            --source-uri "github.com/${GITHUB_REPOSITORY}" \
+            --source-tag "${tag}"
