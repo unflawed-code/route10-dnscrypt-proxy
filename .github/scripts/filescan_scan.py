@@ -23,6 +23,10 @@ DEFAULT_POLL_SECONDS = 15
 # a scan that is still running is not a detection. Bound the wait by wall
 # clock, not by a poll count, so a server-supplied pause cannot shorten it.
 DEFAULT_MAX_WAIT_SECONDS = 1800
+# FileScan sometimes settles a flow as finished with no reports at all, which is
+# a scan that produced nothing to judge rather than a verdict. Submitting the
+# file again is cheap next to reporting a false failure.
+MAX_SCAN_ATTEMPTS = 2
 FAIL_VERDICTS = {"suspicious", "likely_malicious", "malicious"}
 # FileScan.IO sits behind Cloudflare, which rejects Python's default
 # `Python-urllib/x.y` agent with `403 error code: 1010` (banned browser
@@ -152,6 +156,45 @@ def poll_report(
         time.sleep(wait_seconds)
 
 
+def poll_until_verdicts(
+    client: FileScanClient,
+    path: Path,
+    flow_id: str,
+    *,
+    poll_seconds: int,
+    max_wait_seconds: int,
+) -> tuple[str, list[dict[str, str]], dict[str, object]]:
+    """Poll a flow, resubmitting the file if the flow carries no report.
+
+    A flow that reaches `allFinished` with an empty `reports` map has nothing to
+    judge, so the scan produced no verdict. Resubmit and poll the new flow
+    instead of failing the check on a scan that never ran.
+    """
+    payload: dict[str, object] = {}
+    for attempt in range(1, MAX_SCAN_ATTEMPTS + 1):
+        payload = poll_report(
+            client,
+            flow_id,
+            poll_seconds=poll_seconds,
+            max_wait_seconds=max_wait_seconds,
+        )
+        verdicts = report_verdicts(payload)
+        if verdicts:
+            return flow_id, verdicts, payload
+        if attempt == MAX_SCAN_ATTEMPTS:
+            break
+        print(
+            f"FileScan flow {flow_id} finished without a report "
+            f"(allFinished={payload.get('allFinished')!r}, "
+            f"reportsAmount={payload.get('reportsAmount')!r}); "
+            f"resubmitting {path}.",
+            file=sys.stderr,
+            flush=True,
+        )
+        flow_id = client.scan_file(path)
+    return flow_id, [], payload
+
+
 def report_verdicts(payload: dict[str, object]) -> list[dict[str, str]]:
     reports = payload.get("reports", {})
     if not isinstance(reports, dict):
@@ -236,8 +279,9 @@ def main() -> int:
 
     for path, sha256, flow_id in submissions:
         try:
-            payload = poll_report(
+            flow_id, verdicts, payload = poll_until_verdicts(
                 client,
+                path,
                 flow_id,
                 poll_seconds=args.poll_seconds,
                 max_wait_seconds=args.max_wait_seconds,
@@ -254,9 +298,12 @@ def main() -> int:
                 )
             )
             continue
-        verdicts = report_verdicts(payload)
         if not verdicts:
-            failures.append(f"{path}: no report verdict returned for flow {flow_id}")
+            failures.append(
+                f"{path}: no report verdict returned for flow {flow_id} "
+                f"(allFinished={payload.get('allFinished')!r}, "
+                f"reportsAmount={payload.get('reportsAmount')!r})"
+            )
             rows.append(markdown_row(path, sha256, flow_id, {"verdict": "unknown", "threat_level": "", "confidence": ""}))
             continue
 
