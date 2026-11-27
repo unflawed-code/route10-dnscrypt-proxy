@@ -128,7 +128,17 @@ jobs:
             gh release create "${GITHUB_REF_NAME}" --title "${GITHUB_REF_NAME}" --generate-notes
           fi
 
+          # The SLSA generator uploads its attestation first and creates the
+          # release with an empty body, so notes can be missing even here.
           notes_chars="$(gh release view "${GITHUB_REF_NAME}" --json body -q '.body // ""' | tr -d '[:space:]' | wc -c)"
+          if [ "${notes_chars}" -eq 0 ]; then
+            echo "Release ${GITHUB_REF_NAME} has no notes yet; generating them."
+            generated="$(gh api "repos/${GITHUB_REPOSITORY}/releases/generate-notes" -f tag_name="${GITHUB_REF_NAME}" --jq .body)"
+            if [ -n "$(printf '%s' "${generated}" | tr -d '[:space:]')" ]; then
+              gh release edit "${GITHUB_REF_NAME}" --notes "${generated}"
+            fi
+            notes_chars="$(gh release view "${GITHUB_REF_NAME}" --json body -q '.body // ""' | tr -d '[:space:]' | wc -c)"
+          fi
           if [ "${notes_chars}" -eq 0 ]; then
             echo "::error::Release ${GITHUB_REF_NAME} has no release notes; refusing to publish its assets."
             exit 1
