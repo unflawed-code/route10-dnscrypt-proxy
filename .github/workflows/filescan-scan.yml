@@ -12,6 +12,9 @@ jobs:
   scan:
     name: Upstream binary malware scan
     runs-on: ubuntu-latest
+    # Four flows are polled in turn against a 30-minute budget each, so the
+    # job must outlast 4 x 30 minutes even though the flows run concurrently.
+    timeout-minutes: 150
     env:
       FILESCAN_API_KEY: ${{ secrets.FILESCAN_API_KEY }}
 

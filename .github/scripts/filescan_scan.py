@@ -19,7 +19,10 @@ from pathlib import Path
 
 API_BASE = "https://www.filescan.io"
 DEFAULT_POLL_SECONDS = 15
-DEFAULT_MAX_POLLS = 40
+# A 4.6 MB archive can sit in FileScan's queue for longer than ten minutes, and
+# a scan that is still running is not a detection. Bound the wait by wall
+# clock, not by a poll count, so a server-supplied pause cannot shorten it.
+DEFAULT_MAX_WAIT_SECONDS = 1800
 FAIL_VERDICTS = {"suspicious", "likely_malicious", "malicious"}
 # FileScan.IO sits behind Cloudflare, which rejects Python's default
 # `Python-urllib/x.y` agent with `403 error code: 1010` (banned browser
@@ -117,26 +120,36 @@ def poll_report(
     flow_id: str,
     *,
     poll_seconds: int,
-    max_polls: int,
+    max_wait_seconds: int,
 ) -> dict[str, object]:
-    for attempt in range(1, max_polls + 1):
+    deadline = time.monotonic() + max_wait_seconds
+    attempt = 0
+    while True:
+        attempt += 1
         payload = client.get_report(flow_id)
         state = str(payload.get("state") or "")
         all_finished = bool(payload.get("allFinished"))
         if all_finished or state == "finished":
             return payload
 
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise RuntimeError(
+                f"Timed out after {max_wait_seconds}s waiting for FileScan flow "
+                f"{flow_id} (last state={state or 'unknown'})"
+            )
+
         pause = payload.get("pollPause")
         wait_seconds = poll_seconds
         if isinstance(pause, int) and pause > 0:
             wait_seconds = max(poll_seconds, pause)
+        wait_seconds = min(wait_seconds, remaining)
         print(
             f"FileScan flow {flow_id} is state={state or 'unknown'}; "
-            f"poll {attempt}/{max_polls}.",
+            f"poll {attempt}, {int(remaining)}s left.",
             flush=True,
         )
         time.sleep(wait_seconds)
-    raise RuntimeError(f"Timed out waiting for FileScan flow {flow_id}")
 
 
 def report_verdicts(payload: dict[str, object]) -> list[dict[str, str]]:
@@ -193,7 +206,9 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("files", nargs="+", type=Path)
     parser.add_argument("--poll-seconds", type=int, default=DEFAULT_POLL_SECONDS)
-    parser.add_argument("--max-polls", type=int, default=DEFAULT_MAX_POLLS)
+    parser.add_argument(
+        "--max-wait-seconds", type=int, default=DEFAULT_MAX_WAIT_SECONDS
+    )
     args = parser.parse_args()
 
     api_key = os.environ.get("FILESCAN_API_KEY")
@@ -210,16 +225,35 @@ def main() -> int:
     rows: list[str] = []
     failures: list[str] = []
 
+    # Submit every file before polling any of them: each upload is its own flow
+    # and FileScan runs flows concurrently, so polling them in turn costs the
+    # slowest scan's wall time instead of the sum of all four.
+    submissions: list[tuple[Path, str, str]] = []
     for path in selected:
         sha256 = sha256_file(path)
         print(f"Submitting {path} ({path.stat().st_size} bytes, sha256={sha256})", flush=True)
-        flow_id = client.scan_file(path)
-        payload = poll_report(
-            client,
-            flow_id,
-            poll_seconds=args.poll_seconds,
-            max_polls=args.max_polls,
-        )
+        submissions.append((path, sha256, client.scan_file(path)))
+
+    for path, sha256, flow_id in submissions:
+        try:
+            payload = poll_report(
+                client,
+                flow_id,
+                poll_seconds=args.poll_seconds,
+                max_wait_seconds=args.max_wait_seconds,
+            )
+        except RuntimeError as exc:
+            # A scan that never finished is a failed check, not a verdict.
+            failures.append(f"{path}: {exc}")
+            rows.append(
+                markdown_row(
+                    path,
+                    sha256,
+                    flow_id,
+                    {"verdict": "unknown", "threat_level": "", "confidence": ""},
+                )
+            )
+            continue
         verdicts = report_verdicts(payload)
         if not verdicts:
             failures.append(f"{path}: no report verdict returned for flow {flow_id}")
@@ -233,7 +267,7 @@ def main() -> int:
 
     write_summary(rows)
     if failures:
-        print("FileScan.IO detections found:", file=sys.stderr)
+        print("FileScan.IO scan failures:", file=sys.stderr)
         for failure in failures:
             print(f"- {failure}", file=sys.stderr)
         return 1
