@@ -130,17 +130,27 @@ jobs:
 
           # The SLSA generator uploads its attestation first and creates the
           # release with an empty body, so notes can be missing even here.
-          notes_chars="$(gh release view "${GITHUB_REF_NAME}" --json body -q '.body // ""' | tr -d '[:space:]' | wc -c)"
-          if [ "${notes_chars}" -eq 0 ]; then
-            echo "Release ${GITHUB_REF_NAME} has no notes yet; generating them."
+          # A body that is only GitHub's generated changelog footer is treated
+          # as missing: it tells nobody what changed.
+          min_notes_chars=40
+          notes_chars() {
+            local body text
+            body="$(gh release view "${GITHUB_REF_NAME}" --json body -q '.body // ""')"
+            text="$(printf '%s\n' "${body}" | grep -v '^\*\*Full Changelog\*\*:' || true)"
+            printf '%s' "${text}" | tr -d '[:space:]' | wc -c | tr -d ' '
+          }
+
+          chars="$(notes_chars)"
+          if [ "${chars}" -lt "${min_notes_chars}" ]; then
+            echo "Release ${GITHUB_REF_NAME} has no notes beyond the changelog link; generating them."
             generated="$(gh api "repos/${GITHUB_REPOSITORY}/releases/generate-notes" -f tag_name="${GITHUB_REF_NAME}" --jq .body)"
             if [ -n "$(printf '%s' "${generated}" | tr -d '[:space:]')" ]; then
               gh release edit "${GITHUB_REF_NAME}" --notes "${generated}"
             fi
-            notes_chars="$(gh release view "${GITHUB_REF_NAME}" --json body -q '.body // ""' | tr -d '[:space:]' | wc -c)"
+            chars="$(notes_chars)"
           fi
-          if [ "${notes_chars}" -eq 0 ]; then
-            echo "::error::Release ${GITHUB_REF_NAME} has no release notes; refusing to publish its assets."
+          if [ "${chars}" -lt "${min_notes_chars}" ]; then
+            echo "::error::Release ${GITHUB_REF_NAME} has no substantive release notes (${chars} chars after removing the changelog link); refusing to publish its assets."
             exit 1
           fi
 
