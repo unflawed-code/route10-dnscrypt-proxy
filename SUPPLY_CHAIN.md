@@ -38,6 +38,18 @@ release archive, verified against a public key it already holds.
   after applying a release and refuses to update when the signature, the
   `.sig` asset, or this key is missing.
 
+Current trust anchor: SHA-256 over the DER-encoded public key.
+
+```text
+367ebdcc2b6a99048415df3ee68a017b0579db421c9750c5d37edd4cf7783a1d
+```
+
+Print it on a checkout or on a device before trusting an update:
+
+```bash
+openssl pkey -pubin -in conf/release-pub.pem -outform DER | sha256sum
+```
+
 The updater downloads `route10-dnscrypt-proxy-<tag>.tar.gz` and its `.sig`
 from the release assets, and verifies the signature **before** extracting or
 writing anything into the install tree. There is no "allow unverified" flag.
@@ -60,6 +72,15 @@ band first to skip it entirely:
 ```bash
 scp conf/release-pub.pem root@<device>:/cfg/dnscrypt-proxy/conf/
 ```
+
+The catch: on that first run the key that checked the signature arrived inside
+the archive being checked, so the signature proves the archive is
+self-consistent, not that it is the one you meant to install - whoever can
+replace the release asset can replace the key along with it. Compare the
+fingerprint above against a copy of it you did not get from this repository
+(an offline copy, a device that is already anchored, a posting you already
+trust) before the first update. Afterwards the key is in `keep_files`, so no
+release can swap it, and the signature is a real boundary.
 
 ### Signing a release
 
