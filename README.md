@@ -23,6 +23,12 @@ For a first install on a device that has no anchor yet, compare that value
 against a copy you did not download from this repository, because a replaced
 release could arrive with a replaced key.
 
+A copy of that fingerprint, signed with the release key, is mirrored outside
+the repository at
+[gist.github.com/unflawed-code/54722b59bf2408d54356ec6495a89098](https://gist.github.com/unflawed-code/54722b59bf2408d54356ec6495a89098).
+For the full path from download to a verified install, see
+[Verify A Release](SUPPLY_CHAIN.md#verify-a-release).
+
 ## Custom Features
 
 - **Storage Optimized (UPX)**: Uses high-ratio compression to reduce the binary footprint from ~15MB to ~5MB, preserving space on the limited 25MB `/cfg` partition.

@@ -50,6 +50,14 @@ Print it on a checkout or on a device before trusting an update:
 openssl pkey -pubin -in conf/release-pub.pem -outform DER | sha256sum
 ```
 
+A copy of this fingerprint, signed with the release key, is mirrored outside the
+repository at
+[gist.github.com/unflawed-code/54722b59bf2408d54356ec6495a89098](https://gist.github.com/unflawed-code/54722b59bf2408d54356ec6495a89098).
+The gist is hosted under the same account, so it is a second location rather
+than an independent trust root: its signature over the statement makes silent
+edits detectable, but the value still has to be compared against something you
+obtained elsewhere.
+
 The updater downloads `route10-dnscrypt-proxy-<tag>.tar.gz` and its `.sig`
 from the release assets, and verifies the signature **before** extracting or
 writing anything into the install tree. There is no "allow unverified" flag.
@@ -112,15 +120,95 @@ Rotation cannot travel through the update channel - that is the point.
 
 ## Verify A Release
 
-Install the GitHub CLI and `slsa-verifier`, then download and verify:
+### 1. Download
 
 ```bash
-gh release download vX.Y.Z --repo unflawed-code/route10-dnscrypt-proxy
+tag=vX.Y.Z
+repo=unflawed-code/route10-dnscrypt-proxy
+base="https://github.com/$repo/releases/download/$tag"
+
+for f in "route10-dnscrypt-proxy-$tag.tar.gz" \
+         "route10-dnscrypt-proxy-$tag.tar.gz.sig" \
+         "route10-dnscrypt-proxy-$tag.tar.gz.intoto.jsonl" \
+         "SHA256SUMS"; do
+  curl -fsSLO "$base/$f"
+done
+```
+
+### 2. Integrity
+
+```bash
 sha256sum -c SHA256SUMS
-slsa-verifier verify-artifact route10-dnscrypt-proxy-vX.Y.Z.tar.gz \
-  --provenance-path *.intoto.jsonl \
-  --source-uri github.com/unflawed-code/route10-dnscrypt-proxy \
-  --source-tag vX.Y.Z
+```
+
+Expect `route10-dnscrypt-proxy-vX.Y.Z.tar.gz: OK`. This catches a truncated or
+corrupted download. It does not catch a tampered release: the checksums come
+from the same place as the archive.
+
+### 3. Provenance
+
+```bash
+slsa-verifier verify-artifact "route10-dnscrypt-proxy-$tag.tar.gz" \
+  --provenance-path "route10-dnscrypt-proxy-$tag.tar.gz.intoto.jsonl" \
+  --source-uri "github.com/unflawed-code/route10-dnscrypt-proxy" \
+  --source-tag "$tag"
 ```
 
 The verifier should confirm that the artifact was produced by `github.com/unflawed-code/route10-dnscrypt-proxy` from the expected tag.
+
+### 4. Signature
+
+The archive carries the public key that signed it, at `conf/release-pub.pem`.
+
+```bash
+tar -xzf "route10-dnscrypt-proxy-$tag.tar.gz" \
+  "route10-dnscrypt-proxy-$tag/conf/release-pub.pem"
+
+openssl dgst -sha256 -verify "route10-dnscrypt-proxy-$tag/conf/release-pub.pem" \
+  -signature "route10-dnscrypt-proxy-$tag.tar.gz.sig" \
+  "route10-dnscrypt-proxy-$tag.tar.gz"
+```
+
+Expect `Verified OK`; a wrong key or an edited byte gives `Verification failure`.
+Then confirm it is the expected key:
+
+```bash
+openssl pkey -pubin -in "route10-dnscrypt-proxy-$tag/conf/release-pub.pem" \
+  -outform DER | sha256sum
+```
+
+If that does not match the fingerprint above, stop and do not install. This is
+the one step that needs a value from outside the download.
+
+### 5. Install
+
+```bash
+tar -xzf "route10-dnscrypt-proxy-$tag.tar.gz"
+scp -r "route10-dnscrypt-proxy-$tag"/* root@<device>:/cfg/dnscrypt-proxy/
+ssh root@<device> \
+  'chmod 700 /cfg/dnscrypt-proxy/*.sh /cfg/dnscrypt-proxy/scripts/*.sh
+   /cfg/dnscrypt-proxy/setup.sh
+   /cfg/dnscrypt-proxy/proxy.sh start'
+```
+
+`setup.sh` installs the pinned dnscrypt-proxy engine; `proxy.sh start` performs
+the dnsmasq cutover and rolls back if DNSCrypt does not resolve.
+
+### What Each Check Prevents
+
+| Failure | Caught by |
+| --- | --- |
+| Truncated or corrupted download | step 2 |
+| Archive swapped on a mirror or by a hostile network | step 4 |
+| Release built from a different commit or tag | step 3 |
+| Future update signed with a substituted key | the key pinned on the device |
+
+Only the last one protects an already-installed system: the updater verifies
+every release against `conf/release-pub.pem` on the device and refuses to apply
+anything that does not verify, with no override flag.
+
+### If Something Fails
+
+Delete the download and do not install it. Re-fetch; if the failure repeats,
+compare the fingerprint before doing anything else. A signature failure is never
+a transient error to retry around - treat the release as untrusted and report it.
